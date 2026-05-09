@@ -1,11 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.BASE_FUEL_BURN_TONS_PER_KM = void 0;
 exports.advanceShip = advanceShip;
 const geometry_1 = require("./geometry");
 const WAYPOINT_ARRIVAL_RADIUS_KM = 0.5;
-const BASE_FUEL_BURN_TONS_PER_KM = 0.004; // tons per km (realistic for cargo ships)
+exports.BASE_FUEL_BURN_TONS_PER_KM = 0.004; // tons per km (realistic for cargo ships)
 function advanceShip(ship, deltaMs) {
-    if (ship.status === 'arrived' || ship.status === 'stopped') {
+    if (ship.status === 'arrived' || ship.status === 'stopped' || ship.status === 'stranded') {
         return ship;
     }
     if (ship.fuel <= 0) {
@@ -35,12 +36,15 @@ function advanceShip(ship, deltaMs) {
     }
     // Fuel burn in tons
     const fuelMultiplier = ship.inAdverseWeather ? 1.3 : 1.0;
-    const fuelBurned = distanceTraveledKm * BASE_FUEL_BURN_TONS_PER_KM * fuelMultiplier;
+    const fuelBurned = distanceTraveledKm * exports.BASE_FUEL_BURN_TONS_PER_KM * fuelMultiplier;
     const newFuel = Math.max(0, ship.fuel - fuelBurned);
     // Fuel percentage for status check
     const fuelPercent = (newFuel / ship.maxFuel) * 100;
     let newStatus = ship.status;
-    if (fuelPercent < 15 && ship.status === 'normal') {
+    if (newFuel <= 0) {
+        newStatus = 'out_of_fuel';
+    }
+    else if (fuelPercent < 15 && (ship.status === 'normal' || ship.status === 'rerouting')) {
         newStatus = 'insufficient_fuel';
     }
     return {

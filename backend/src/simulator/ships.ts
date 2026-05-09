@@ -6,10 +6,10 @@ import {
 } from './geometry'
 
 const WAYPOINT_ARRIVAL_RADIUS_KM = 0.5
-const BASE_FUEL_BURN_TONS_PER_KM = 0.004  // tons per km (realistic for cargo ships)
+export const BASE_FUEL_BURN_TONS_PER_KM = 0.004  // tons per km (realistic for cargo ships)
 
 export function advanceShip(ship: Ship, deltaMs: number): Ship {
-  if (ship.status === 'arrived' || ship.status === 'stopped') {
+  if (ship.status === 'arrived' || ship.status === 'stopped' || ship.status === 'stranded') {
     return ship
   }
 
@@ -69,7 +69,9 @@ export function advanceShip(ship: Ship, deltaMs: number): Ship {
   const fuelPercent = (newFuel / ship.maxFuel) * 100
 
   let newStatus = ship.status
-  if (fuelPercent < 15 && ship.status === 'normal') {
+  if (newFuel <= 0) {
+    newStatus = 'out_of_fuel'
+  } else if (fuelPercent < 15 && (ship.status === 'normal' || ship.status === 'rerouting')) {
     newStatus = 'insufficient_fuel'
   }
 

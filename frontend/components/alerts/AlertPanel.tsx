@@ -7,7 +7,9 @@ export function AlertPanel({
   alerts: Alert[]
   onAcknowledge: (alertId: string) => void
 }) {
-  const activeAlerts = alerts.filter((alert) => alert.active)
+  const activeAlerts = alerts
+    .filter((alert) => alert.active)
+    .sort((a, b) => severityRank[b.severity] - severityRank[a.severity] || b.createdAt - a.createdAt)
 
   return (
     <section className="panel alertPanel">
@@ -30,4 +32,11 @@ export function AlertPanel({
       </div>
     </section>
   )
+}
+
+const severityRank = {
+  low: 1,
+  medium: 2,
+  high: 3,
+  critical: 4,
 }

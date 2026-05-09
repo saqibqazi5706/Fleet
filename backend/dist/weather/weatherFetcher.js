@@ -4,13 +4,24 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.isAdverseWeather = isAdverseWeather;
+exports.getWeatherState = getWeatherState;
 exports.refreshWeather = refreshWeather;
 const axios_1 = __importDefault(require("axios"));
 const HORMUZ_LAT = 26.5;
 const HORMUZ_LNG = 56.5;
 let adverseWeather = true;
+let weatherState = {
+    adverse: true,
+    windspeed10m: null,
+    waveHeight: null,
+    updatedAt: Date.now(),
+    source: 'fallback',
+};
 function isAdverseWeather() {
     return adverseWeather;
+}
+function getWeatherState() {
+    return weatherState;
 }
 async function refreshWeather() {
     try {
@@ -28,10 +39,24 @@ async function refreshWeather() {
         const wind = response.data?.hourly?.windspeed_10m?.[hour] ?? 0;
         const wave = response.data?.hourly?.wave_height?.[hour] ?? 0;
         adverseWeather = wind > 15 || wave > 2.5;
+        weatherState = {
+            adverse: adverseWeather,
+            windspeed10m: wind,
+            waveHeight: wave,
+            updatedAt: Date.now(),
+            source: 'open-meteo',
+        };
         console.log(`Weather updated: wind=${wind}, wave=${wave}, adverse=${adverseWeather}`);
     }
     catch (error) {
         adverseWeather = true;
+        weatherState = {
+            adverse: true,
+            windspeed10m: null,
+            waveHeight: null,
+            updatedAt: Date.now(),
+            source: 'fallback',
+        };
         console.warn('Weather fetch failed; using adverse weather fallback');
     }
 }

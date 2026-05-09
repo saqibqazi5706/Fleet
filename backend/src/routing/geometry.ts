@@ -2,6 +2,8 @@ import { Position } from '../types'
 import { haversineDistance } from '../simulator/geometry'
 
 export function pointInPolygon(point: Position, polygon: [number, number][]): boolean {
+  if (pointOnPolygonBoundary(point, polygon)) return true
+
   const x = point.lng
   const y = point.lat
   let inside = false
@@ -30,6 +32,10 @@ export function routeIntersectsPolygon(from: Position, to: Position, polygon: [n
   return false
 }
 
+export function segmentIntersectsPolygon(from: Position, to: Position, polygon: [number, number][]): boolean {
+  return routeIntersectsPolygon(from, to, polygon)
+}
+
 export function polygonCenter(polygon: [number, number][]): Position {
   const total = polygon.reduce(
     (acc, coord) => ({ lat: acc.lat + coord[0], lng: acc.lng + coord[1] }),
@@ -46,11 +52,42 @@ export function distanceKm(a: Position, b: Position): number {
   return haversineDistance(a.lat, a.lng, b.lat, b.lng)
 }
 
+export function pointOnPolygonBoundary(point: Position, polygon: [number, number][]): boolean {
+  for (let i = 0; i < polygon.length; i++) {
+    const a = toPosition(polygon[i])
+    const b = toPosition(polygon[(i + 1) % polygon.length])
+    if (pointOnSegment(point, a, b)) return true
+  }
+
+  return false
+}
+
+export function isPointInAnyPolygon(point: Position, polygons: [number, number][][]): boolean {
+  return polygons.some((polygon) => pointInPolygon(point, polygon))
+}
+
+export function polygonBounds(polygon: [number, number][]): {
+  north: number
+  south: number
+  east: number
+  west: number
+} {
+  return polygon.reduce(
+    (bounds, coord) => ({
+      north: Math.max(bounds.north, coord[0]),
+      south: Math.min(bounds.south, coord[0]),
+      east: Math.max(bounds.east, coord[1]),
+      west: Math.min(bounds.west, coord[1]),
+    }),
+    { north: -Infinity, south: Infinity, east: -Infinity, west: Infinity }
+  )
+}
+
 function toPosition(coord: [number, number]): Position {
   return { lat: coord[0], lng: coord[1] }
 }
 
-function segmentsIntersect(a: Position, b: Position, c: Position, d: Position): boolean {
+export function segmentsIntersect(a: Position, b: Position, c: Position, d: Position): boolean {
   const det = (p: Position, q: Position, r: Position) =>
     (q.lng - p.lng) * (r.lat - p.lat) - (q.lat - p.lat) * (r.lng - p.lng)
 
@@ -60,4 +97,15 @@ function segmentsIntersect(a: Position, b: Position, c: Position, d: Position): 
   const d4 = det(c, d, b)
 
   return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
+}
+
+function pointOnSegment(point: Position, a: Position, b: Position): boolean {
+  const cross = (point.lat - a.lat) * (b.lng - a.lng) - (point.lng - a.lng) * (b.lat - a.lat)
+  if (Math.abs(cross) > 1e-9) return false
+
+  const dot = (point.lng - a.lng) * (b.lng - a.lng) + (point.lat - a.lat) * (b.lat - a.lat)
+  if (dot < -1e-9) return false
+
+  const squaredLength = (b.lng - a.lng) ** 2 + (b.lat - a.lat) ** 2
+  return dot <= squaredLength + 1e-9
 }

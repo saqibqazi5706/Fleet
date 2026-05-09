@@ -9,11 +9,13 @@ export function getAlerts(): Alert[] {
 export function createAlert(input: {
   type: AlertType
   severity: Severity
-  shipId: string
+  shipId?: string
+  relatedShipId?: string
   message: string
   dedupeKey?: string
+  metadata?: Record<string, unknown>
 }): Alert | null {
-  const dedupeKey = input.dedupeKey || `${input.type}:${input.shipId}`
+  const dedupeKey = input.dedupeKey || `${input.type}:${input.shipId || 'fleet'}`
   const existing = alerts.get(dedupeKey)
   if (existing && existing.active && !existing.acknowledged) return null
 
@@ -22,10 +24,12 @@ export function createAlert(input: {
     type: input.type,
     severity: input.severity,
     shipId: input.shipId,
+    relatedShipId: input.relatedShipId,
     message: input.message,
     active: true,
     acknowledged: false,
     createdAt: Date.now(),
+    metadata: input.metadata,
   }
 
   alerts.set(dedupeKey, alert)

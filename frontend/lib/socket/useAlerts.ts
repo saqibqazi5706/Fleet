@@ -11,6 +11,9 @@ export function useAlerts() {
     const socket = getSocket()
 
     const handleState = (data: { alerts: Alert[] }) => setAlerts(data.alerts)
+    const handleFleetState = (data: { alerts?: Alert[] }) => {
+      if (data.alerts) setAlerts(data.alerts)
+    }
     const handleCreated = (alert: Alert) => {
       setAlerts((current) => [alert, ...current.filter((item) => item.id !== alert.id)])
       playAlertSound(alert.severity)
@@ -18,10 +21,12 @@ export function useAlerts() {
 
     socket.on('alerts_state', handleState)
     socket.on('alert_created', handleCreated)
+    socket.on('fleet_state', handleFleetState)
 
     return () => {
       socket.off('alerts_state', handleState)
       socket.off('alert_created', handleCreated)
+      socket.off('fleet_state', handleFleetState)
     }
   }, [])
 

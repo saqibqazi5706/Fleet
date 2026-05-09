@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from 'react'
 import { getSocket } from './socketClient'
-import { Ship } from '@/lib/types'
+import { Alert, FleetStatePayload, Ship, WeatherState, Zone } from '@/lib/types'
 
 export function useFleetState() {
   const [ships, setShips] = useState<Ship[]>([])
   const [lastTimestamp, setLastTimestamp] = useState<number>(0)
   const [connected, setConnected] = useState(false)
+  const [zones, setZones] = useState<Zone[]>([])
+  const [alerts, setAlerts] = useState<Alert[]>([])
+  const [weather, setWeather] = useState<WeatherState | null>(null)
 
   useEffect(() => {
     const socket = getSocket()
@@ -16,9 +19,12 @@ export function useFleetState() {
     socket.on('disconnect', () => setConnected(false))
     setConnected(socket.connected)
 
-    socket.on('fleet_state', (data: { ships: Ship[]; timestamp: number }) => {
+    socket.on('fleet_state', (data: FleetStatePayload | { ships: Ship[]; timestamp: number }) => {
       setShips(data.ships)
       setLastTimestamp(data.timestamp)
+      if ('zones' in data) setZones(data.zones)
+      if ('alerts' in data) setAlerts(data.alerts)
+      if ('weather' in data) setWeather(data.weather)
     })
 
     return () => {
@@ -28,5 +34,5 @@ export function useFleetState() {
     }
   }, [])
 
-  return { ships, lastTimestamp, connected }
+  return { ships, zones, alerts, weather, lastTimestamp, connected }
 }

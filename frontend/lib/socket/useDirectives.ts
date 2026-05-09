@@ -4,6 +4,16 @@ import { useEffect, useState } from 'react'
 import { Directive, DistressResult } from '@/lib/types'
 import { getSocket } from './socketClient'
 
+type DistressParsedEvent =
+  | DistressResult
+  | {
+      shipId: string
+      raw: string
+      parsed: DistressResult
+      alert?: unknown
+      parsedAt: number
+    }
+
 export function useDirectives(shipId?: string, command = false) {
   const [directives, setDirectives] = useState<Directive[]>([])
   const [distressResults, setDistressResults] = useState<DistressResult[]>([])
@@ -16,8 +26,16 @@ export function useDirectives(shipId?: string, command = false) {
     const handleDirective = (directive: Directive) => {
       setDirectives((current) => [directive, ...current.filter((item) => item.id !== directive.id)])
     }
-    const handleDistress = (result: DistressResult) => {
-      setDistressResults((current) => [result, ...current])
+    const handleDistress = (result: DistressParsedEvent) => {
+      const normalized = 'parsed' in result
+        ? {
+            ...result.parsed,
+            shipId: result.shipId,
+            raw: result.raw,
+            parsedAt: result.parsedAt,
+          }
+        : result
+      setDistressResults((current) => [normalized, ...current])
     }
 
     socket.on('directive_received', handleDirective)

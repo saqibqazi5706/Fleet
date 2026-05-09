@@ -14,6 +14,7 @@ function createZone(input) {
         coordinates: input.coordinates,
         label: input.label || 'Restricted zone',
         createdAt: Date.now(),
+        updatedAt: Date.now(),
     };
     zones.set(zone.id, zone);
     return zone;
@@ -22,7 +23,7 @@ function updateZone(input) {
     const existing = zones.get(input.id);
     if (!existing)
         return null;
-    const updated = { ...existing, coordinates: input.coordinates };
+    const updated = { ...existing, coordinates: input.coordinates, updatedAt: Date.now() };
     zones.set(updated.id, updated);
     return updated;
 }

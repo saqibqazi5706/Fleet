@@ -12,6 +12,7 @@ export function createZone(input: { id: string; coordinates: [number, number][];
     coordinates: input.coordinates,
     label: input.label || 'Restricted zone',
     createdAt: Date.now(),
+    updatedAt: Date.now(),
   }
   zones.set(zone.id, zone)
   return zone
@@ -21,7 +22,7 @@ export function updateZone(input: { id: string; coordinates: [number, number][] 
   const existing = zones.get(input.id)
   if (!existing) return null
 
-  const updated = { ...existing, coordinates: input.coordinates }
+  const updated = { ...existing, coordinates: input.coordinates, updatedAt: Date.now() }
   zones.set(updated.id, updated)
   return updated
 }

@@ -49,14 +49,28 @@ app.get('/alerts', (_req, res) => {
 app.get('/playback/window', (_req, res) => {
     res.json((0, snapshotStore_1.getPlaybackWindow)());
 });
+function buildFleetState(timestamp = Date.now()) {
+    return {
+        ships: (0, tick_1.getFleet)(),
+        zones: (0, zoneStore_1.getZones)(),
+        alerts: (0, alertManager_1.getAlerts)(),
+        weather: (0, weatherFetcher_1.getWeatherState)(),
+        timestamp,
+    };
+}
+function broadcastFleetState(timestamp = Date.now()) {
+    io.emit('fleet_state', buildFleetState(timestamp));
+}
+function broadcastAlerts(alerts) {
+    alerts.forEach((alert) => io.emit('alert_created', alert));
+    if (alerts.length > 0)
+        io.emit('alerts_state', { alerts: (0, alertManager_1.getAlerts)() });
+}
 // Socket.IO connections
 io.on('connection', (socket) => {
     console.log(`Client connected: ${socket.id}`);
     // Send current fleet state immediately on connect
-    socket.emit('fleet_state', {
-        ships: (0, tick_1.getFleet)(),
-        timestamp: Date.now(),
-    });
+    socket.emit('fleet_state', buildFleetState());
     socket.emit('zones_state', { zones: (0, zoneStore_1.getZones)() });
     socket.emit('alerts_state', { alerts: (0, alertManager_1.getAlerts)() });
     socket.emit('playback_window', (0, snapshotStore_1.getPlaybackWindow)());
@@ -70,19 +84,28 @@ io.on('connection', (socket) => {
         const zone = (0, zoneStore_1.createZone)(payload);
         (0, supabase_1.saveZone)(zone);
         io.emit('zone_updated', { action: 'create', zone });
+        const result = (0, tick_1.runImmediateGeofenceCheck)((0, zoneStore_1.getZones)());
+        const routeResult = (0, tick_1.recomputeFleetRoutes)((0, zoneStore_1.getZones)());
+        broadcastAlerts([...result.alerts, ...routeResult.alerts]);
+        broadcastFleetState();
     });
     socket.on('update_zone', (payload) => {
-        const zone = (0, zoneStore_1.updateZone)(payload);
-        if (!zone)
-            return;
+        const zone = (0, zoneStore_1.updateZone)(payload) || (0, zoneStore_1.createZone)({ ...payload, label: 'Command restricted zone' });
         (0, supabase_1.saveZone)(zone);
         io.emit('zone_updated', { action: 'update', zone });
+        const result = (0, tick_1.runImmediateGeofenceCheck)((0, zoneStore_1.getZones)());
+        const routeResult = (0, tick_1.recomputeFleetRoutes)((0, zoneStore_1.getZones)());
+        broadcastAlerts([...result.alerts, ...routeResult.alerts]);
+        broadcastFleetState();
     });
     socket.on('delete_zone', ({ id }) => {
         const zone = (0, zoneStore_1.deleteZone)(id);
         if (!zone)
             return;
         io.emit('zone_updated', { action: 'delete', zone });
+        const routeResult = (0, tick_1.recomputeFleetRoutes)((0, zoneStore_1.getZones)());
+        broadcastAlerts(routeResult.alerts);
+        broadcastFleetState();
     });
     socket.on('send_directive', (payload) => {
         const directive = (0, directiveHandler_1.createDirective)(payload);
@@ -91,21 +114,56 @@ io.on('connection', (socket) => {
     });
     socket.on('directive_response', async (payload) => {
         if (payload.response === 'ACCEPT') {
-            if (payload.directive?.type === 'HOLD_POSITION')
-                (0, tick_1.holdShip)(payload.shipId);
-            if (payload.directive?.type === 'CHANGE_DESTINATION' && payload.directive.payload?.destination) {
-                (0, tick_1.setShipDestination)(payload.shipId, payload.directive.payload.destination);
+            if (payload.directive?.type) {
+                (0, tick_1.queueDirective)({
+                    id: payload.directiveId,
+                    shipId: payload.shipId,
+                    fromCommand: true,
+                    type: payload.directive.type,
+                    payload: payload.directive.payload || {},
+                    sentAt: Date.now(),
+                });
             }
-            if (payload.directive?.type === 'REROUTE_WAYPOINT' && payload.directive.payload?.waypoint) {
-                (0, tick_1.setShipWaypoint)(payload.shipId, payload.directive.payload.waypoint);
-            }
-            io.emit('fleet_state', { ships: (0, tick_1.getFleet)(), timestamp: Date.now() });
+            io.emit('directive_response_broadcast', {
+                directiveId: payload.directiveId,
+                shipId: payload.shipId,
+                response: payload.response,
+                timestamp: Date.now(),
+            });
+            broadcastFleetState();
             return;
         }
         (0, tick_1.markDistressed)(payload.shipId);
         const distress = await (0, distressParser_1.parseDistress)(payload.shipId, payload.distressMessage || 'Distress escalated without details');
         (0, supabase_1.saveDistress)(distress);
-        io.emit('distress_parsed', distress);
+        const distressAlert = (0, alertManager_1.createAlert)({
+            type: 'DISTRESS',
+            severity: distress.severity,
+            shipId: payload.shipId,
+            message: `Distress from ${payload.shipId}: ${distress.issueType}`,
+            dedupeKey: `DISTRESS:${payload.shipId}:${payload.directiveId}`,
+            metadata: {
+                rawMessage: distress.raw,
+                parsed: distress,
+            },
+        });
+        io.emit('directive_response_broadcast', {
+            directiveId: payload.directiveId,
+            shipId: payload.shipId,
+            response: payload.response,
+            distress,
+            timestamp: Date.now(),
+        });
+        io.emit('distress_parsed', {
+            shipId: payload.shipId,
+            raw: distress.raw,
+            parsed: distress,
+            alert: distressAlert,
+            parsedAt: distress.parsedAt,
+        });
+        if (distressAlert)
+            broadcastAlerts([distressAlert]);
+        broadcastFleetState();
     });
     socket.on('request_snapshot', ({ requestId, timestamp }) => {
         const snapshot = (0, snapshotStore_1.getSnapshot)(timestamp) || (0, snapshotStore_1.maybeSaveSnapshot)((0, tick_1.getFleet)(), Date.now());
@@ -137,11 +195,8 @@ setInterval(() => {
     const deltaMs = now - lastTickTime;
     lastTickTime = now;
     const result = (0, tick_1.updateFleet)(deltaMs, (0, zoneStore_1.getZones)(), (0, weatherFetcher_1.isAdverseWeather)());
-    io.emit('fleet_state', {
-        ships: result.ships,
-        timestamp: now,
-    });
-    result.alerts.forEach((alert) => io.emit('alert_created', alert));
+    io.emit('fleet_state', buildFleetState(now));
+    broadcastAlerts(result.alerts);
     io.emit('playback_window', (0, snapshotStore_1.getPlaybackWindow)());
 }, TICK_INTERVAL_MS);
 // Start server

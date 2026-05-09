@@ -8,7 +8,7 @@ function getAlerts() {
     return Array.from(alerts.values()).sort((a, b) => b.createdAt - a.createdAt);
 }
 function createAlert(input) {
-    const dedupeKey = input.dedupeKey || `${input.type}:${input.shipId}`;
+    const dedupeKey = input.dedupeKey || `${input.type}:${input.shipId || 'fleet'}`;
     const existing = alerts.get(dedupeKey);
     if (existing && existing.active && !existing.acknowledged)
         return null;
@@ -17,10 +17,12 @@ function createAlert(input) {
         type: input.type,
         severity: input.severity,
         shipId: input.shipId,
+        relatedShipId: input.relatedShipId,
         message: input.message,
         active: true,
         acknowledged: false,
         createdAt: Date.now(),
+        metadata: input.metadata,
     };
     alerts.set(dedupeKey, alert);
     return alert;

@@ -7,6 +7,7 @@ export type ShipStatus =
   | 'insufficient_fuel'
   | 'arrived'
   | 'out_of_fuel'
+  | 'restricted_zone_breach'
 
 export interface Position {
   lat: number
@@ -47,6 +48,9 @@ export type AlertType =
   | 'STRANDED'
   | 'INSUFFICIENT_FUEL'
   | 'OUT_OF_FUEL'
+  | 'DISTRESS'
+  | 'WEATHER_RISK'
+  | 'ARRIVAL'
 
 export type Severity = 'low' | 'medium' | 'high' | 'critical'
 
@@ -55,17 +59,21 @@ export interface Zone {
   coordinates: [number, number][]
   label: string
   createdAt: number
+  updatedAt: number
 }
 
 export interface Alert {
   id: string
   type: AlertType
   severity: Severity
-  shipId: string
+  shipId?: string
+  relatedShipId?: string
   message: string
   active: boolean
   acknowledged: boolean
   createdAt: number
+  resolvedAt?: number
+  metadata?: Record<string, unknown>
 }
 
 export interface Directive {
@@ -86,7 +94,7 @@ export interface DistressParseResult {
   severity: Severity
   issueType: string
   injuries: number
-  damageEstimate: 'none' | 'minor' | 'moderate' | 'major' | 'total_loss'
+  damageEstimate: 'none' | 'minor' | 'moderate' | 'major' | 'total_loss' | 'unknown'
   impact: string
   recommendedAction: string
   parsedAt: number
@@ -95,6 +103,24 @@ export interface DistressParseResult {
 export interface Snapshot {
   timestamp: number
   ships: Ship[]
+  alerts?: Alert[]
+  zones?: Zone[]
+}
+
+export interface WeatherState {
+  adverse: boolean
+  windspeed10m: number | null
+  waveHeight: number | null
+  updatedAt: number
+  source: 'open-meteo' | 'fallback'
+}
+
+export interface FleetStatePayload {
+  ships: Ship[]
+  zones: Zone[]
+  alerts: Alert[]
+  weather: WeatherState
+  timestamp: number
 }
 
 export interface FleetScenario {

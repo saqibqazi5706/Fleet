@@ -9,6 +9,7 @@ const colors: Record<ShipStatus, string> = {
   insufficient_fuel: '#ff8800',
   arrived: '#00ff88',
   out_of_fuel: '#ff0033',
+  restricted_zone_breach: '#ff0033',
 }
 
 export function ShipStatusBadge({ status }: { status: ShipStatus }) {

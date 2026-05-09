@@ -9,14 +9,20 @@ export function AIDistressResult({ results }: { results: DistressResult[] }) {
       </div>
       <div className="stack">
         {results.length === 0 && <p className="muted">No distress messages parsed yet.</p>}
-        {results.slice(0, 3).map((result) => (
-          <article key={`${result.shipId}:${result.parsedAt}`} className={`alertItem severity-${result.severity}`}>
-            <strong>{result.severity.toUpperCase()} · {result.issueType}</strong>
-            <p>{result.raw}</p>
-            <p>Injuries: {result.injuries} · Damage: {result.damageEstimate}</p>
-            <p>{result.recommendedAction}</p>
-          </article>
-        ))}
+        {results.slice(0, 3).map((result) => {
+          const severity = result.severity || 'medium'
+          return (
+            <article
+              key={`${result.shipId || 'unknown'}:${result.parsedAt || result.raw || Math.random()}`}
+              className={`alertItem severity-${severity}`}
+            >
+              <strong>{severity.toUpperCase()} - {result.issueType || 'unknown'}</strong>
+              <p>{result.raw || 'Distress message received.'}</p>
+              <p>Injuries: {Number(result.injuries || 0)} - Damage: {result.damageEstimate || 'unknown'}</p>
+              <p>{result.recommendedAction || 'Command review required.'}</p>
+            </article>
+          )
+        })}
       </div>
     </section>
   )

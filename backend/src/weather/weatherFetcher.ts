@@ -1,12 +1,24 @@
 import axios from 'axios'
+import { WeatherState } from '../types'
 
 const HORMUZ_LAT = 26.5
 const HORMUZ_LNG = 56.5
 
 let adverseWeather = true
+let weatherState: WeatherState = {
+  adverse: true,
+  windspeed10m: null,
+  waveHeight: null,
+  updatedAt: Date.now(),
+  source: 'fallback',
+}
 
 export function isAdverseWeather(): boolean {
   return adverseWeather
+}
+
+export function getWeatherState(): WeatherState {
+  return weatherState
 }
 
 export async function refreshWeather(): Promise<void> {
@@ -26,9 +38,23 @@ export async function refreshWeather(): Promise<void> {
     const wind = response.data?.hourly?.windspeed_10m?.[hour] ?? 0
     const wave = response.data?.hourly?.wave_height?.[hour] ?? 0
     adverseWeather = wind > 15 || wave > 2.5
+    weatherState = {
+      adverse: adverseWeather,
+      windspeed10m: wind,
+      waveHeight: wave,
+      updatedAt: Date.now(),
+      source: 'open-meteo',
+    }
     console.log(`Weather updated: wind=${wind}, wave=${wave}, adverse=${adverseWeather}`)
   } catch (error) {
     adverseWeather = true
+    weatherState = {
+      adverse: true,
+      windspeed10m: null,
+      waveHeight: null,
+      updatedAt: Date.now(),
+      source: 'fallback',
+    }
     console.warn('Weather fetch failed; using adverse weather fallback')
   }
 }

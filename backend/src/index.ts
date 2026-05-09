@@ -6,21 +6,22 @@ import dotenv from 'dotenv'
 
 import { initialFleet } from './data/fleetLoader'
 import {
-  holdShip,
   initFleet,
   markDistressed,
-  setShipDestination,
-  setShipWaypoint,
+  queueDirective,
+  recomputeFleetRoutes,
+  runImmediateGeofenceCheck,
   updateFleet,
   getFleet,
 } from './simulator/tick'
-import { acknowledgeAlert, getAlerts } from './alerts/alertManager'
+import { acknowledgeAlert, createAlert, getAlerts } from './alerts/alertManager'
 import { createZone, deleteZone, getZones, updateZone } from './zones/zoneStore'
-import { isAdverseWeather, refreshWeather } from './weather/weatherFetcher'
+import { getWeatherState, isAdverseWeather, refreshWeather } from './weather/weatherFetcher'
 import { getPlaybackWindow, getSnapshot, maybeSaveSnapshot } from './playback/snapshotStore'
 import { createDirective } from './directives/directiveHandler'
 import { parseDistress } from './ai/distressParser'
 import { saveDistress, saveZone } from './persistence/supabase'
+import { Alert, FleetStatePayload } from './types'
 
 dotenv.config()
 
@@ -63,15 +64,31 @@ app.get('/playback/window', (_req, res) => {
   res.json(getPlaybackWindow())
 })
 
+function buildFleetState(timestamp = Date.now()): FleetStatePayload {
+  return {
+    ships: getFleet(),
+    zones: getZones(),
+    alerts: getAlerts(),
+    weather: getWeatherState(),
+    timestamp,
+  }
+}
+
+function broadcastFleetState(timestamp = Date.now()): void {
+  io.emit('fleet_state', buildFleetState(timestamp))
+}
+
+function broadcastAlerts(alerts: Alert[]): void {
+  alerts.forEach((alert) => io.emit('alert_created', alert))
+  if (alerts.length > 0) io.emit('alerts_state', { alerts: getAlerts() })
+}
+
 // Socket.IO connections
 io.on('connection', (socket) => {
   console.log(`Client connected: ${socket.id}`)
 
   // Send current fleet state immediately on connect
-  socket.emit('fleet_state', {
-    ships: getFleet(),
-    timestamp: Date.now(),
-  })
+  socket.emit('fleet_state', buildFleetState())
   socket.emit('zones_state', { zones: getZones() })
   socket.emit('alerts_state', { alerts: getAlerts() })
   socket.emit('playback_window', getPlaybackWindow())
@@ -88,19 +105,29 @@ io.on('connection', (socket) => {
     const zone = createZone(payload)
     saveZone(zone)
     io.emit('zone_updated', { action: 'create', zone })
+    const result = runImmediateGeofenceCheck(getZones())
+    const routeResult = recomputeFleetRoutes(getZones())
+    broadcastAlerts([...result.alerts, ...routeResult.alerts])
+    broadcastFleetState()
   })
 
   socket.on('update_zone', (payload: { id: string; coordinates: [number, number][] }) => {
-    const zone = updateZone(payload)
-    if (!zone) return
+    const zone = updateZone(payload) || createZone({ ...payload, label: 'Command restricted zone' })
     saveZone(zone)
     io.emit('zone_updated', { action: 'update', zone })
+    const result = runImmediateGeofenceCheck(getZones())
+    const routeResult = recomputeFleetRoutes(getZones())
+    broadcastAlerts([...result.alerts, ...routeResult.alerts])
+    broadcastFleetState()
   })
 
   socket.on('delete_zone', ({ id }: { id: string }) => {
     const zone = deleteZone(id)
     if (!zone) return
     io.emit('zone_updated', { action: 'delete', zone })
+    const routeResult = recomputeFleetRoutes(getZones())
+    broadcastAlerts(routeResult.alerts)
+    broadcastFleetState()
   })
 
   socket.on('send_directive', (payload: {
@@ -121,21 +148,56 @@ io.on('connection', (socket) => {
     directive?: { type: string; payload?: { destination?: { lat: number; lng: number; name: string }; waypoint?: { lat: number; lng: number } } }
   }) => {
     if (payload.response === 'ACCEPT') {
-      if (payload.directive?.type === 'HOLD_POSITION') holdShip(payload.shipId)
-      if (payload.directive?.type === 'CHANGE_DESTINATION' && payload.directive.payload?.destination) {
-        setShipDestination(payload.shipId, payload.directive.payload.destination)
+      if (payload.directive?.type) {
+        queueDirective({
+          id: payload.directiveId,
+          shipId: payload.shipId,
+          fromCommand: true,
+          type: payload.directive.type as 'CHANGE_DESTINATION' | 'HOLD_POSITION' | 'REROUTE_WAYPOINT',
+          payload: payload.directive.payload || {},
+          sentAt: Date.now(),
+        })
       }
-      if (payload.directive?.type === 'REROUTE_WAYPOINT' && payload.directive.payload?.waypoint) {
-        setShipWaypoint(payload.shipId, payload.directive.payload.waypoint)
-      }
-      io.emit('fleet_state', { ships: getFleet(), timestamp: Date.now() })
+      io.emit('directive_response_broadcast', {
+        directiveId: payload.directiveId,
+        shipId: payload.shipId,
+        response: payload.response,
+        timestamp: Date.now(),
+      })
+      broadcastFleetState()
       return
     }
 
     markDistressed(payload.shipId)
     const distress = await parseDistress(payload.shipId, payload.distressMessage || 'Distress escalated without details')
     saveDistress(distress)
-    io.emit('distress_parsed', distress)
+    const distressAlert = createAlert({
+      type: 'DISTRESS',
+      severity: distress.severity,
+      shipId: payload.shipId,
+      message: `Distress from ${payload.shipId}: ${distress.issueType}`,
+      dedupeKey: `DISTRESS:${payload.shipId}:${payload.directiveId}`,
+      metadata: {
+        rawMessage: distress.raw,
+        parsed: distress,
+      },
+    })
+    io.emit('directive_response_broadcast', {
+      directiveId: payload.directiveId,
+      shipId: payload.shipId,
+      response: payload.response,
+      distress,
+      timestamp: Date.now(),
+    })
+    io.emit('distress_parsed', {
+      shipId: payload.shipId,
+      raw: distress.raw,
+      parsed: distress,
+      alert: distressAlert,
+      parsedAt: distress.parsedAt,
+    })
+    if (distressAlert) broadcastAlerts([distressAlert])
+    broadcastFleetState()
   })
 
   socket.on('request_snapshot', ({ requestId, timestamp }: { requestId: string; timestamp: number }) => {
@@ -174,11 +236,8 @@ setInterval(() => {
 
   const result = updateFleet(deltaMs, getZones(), isAdverseWeather())
 
-  io.emit('fleet_state', {
-    ships: result.ships,
-    timestamp: now,
-  })
-  result.alerts.forEach((alert) => io.emit('alert_created', alert))
+  io.emit('fleet_state', buildFleetState(now))
+  broadcastAlerts(result.alerts)
   io.emit('playback_window', getPlaybackWindow())
 }, TICK_INTERVAL_MS)
 
