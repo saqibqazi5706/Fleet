@@ -8,6 +8,7 @@ import { DirectiveComposer } from '@/components/directives/DirectiveComposer'
 import { TopBar } from '@/components/layout/TopBar'
 import { PlaybackSlider } from '@/components/playback/PlaybackSlider'
 import { ShipDetailCard } from '@/components/ships/ShipDetailCard'
+import { HUDCornerDecor } from '@/components/layout/HUDCornerDecor'
 import { useAlerts } from '@/lib/socket/useAlerts'
 import { useDirectives } from '@/lib/socket/useDirectives'
 import { useFleetState } from '@/lib/socket/useFleetState'
@@ -17,7 +18,12 @@ import { Ship } from '@/lib/types'
 
 const FleetMap = dynamic(() => import('@/components/map/FleetMap'), {
   ssr: false,
-  loading: () => <div className="mapLoading">Loading command map...</div>,
+  loading: () => (
+    <div className="mapLoading">
+      <div className="mapSpinner" />
+      <span>INITIALIZING COMMAND systems...</span>
+    </div>
+  ),
 })
 
 export default function CommandPage() {
@@ -35,18 +41,33 @@ export default function CommandPage() {
   )
 
   return (
-    <main className="opsShell">
+    <main className="opsShell noise">
+      <HUDCornerDecor position="top-left" />
+      <HUDCornerDecor position="top-right" />
+      <HUDCornerDecor position="bottom-left" />
+      <HUDCornerDecor position="bottom-right" />
+
       <TopBar
         role="Command Center"
         connected={connected}
         shipCount={ships.length}
         lastTimestamp={lastTimestamp}
       />
+
       <aside className="leftRail">
-        <ShipDetailCard ship={selectedShip} />
+        <div className="panel" style={{ padding: 0, overflow: 'hidden', marginBottom: 16 }}>
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+            <h2 style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.18em', color: 'rgba(148,163,184,0.45)' }}>
+              VESSEL DETAILS
+            </h2>
+          </div>
+          <ShipDetailCard ship={selectedShip} />
+        </div>
+
         <DirectiveComposer ship={selectedShip} onSend={sendDirective} />
         <AIDistressResult results={distressResults} />
       </aside>
+
       <section className="mapStage">
         <FleetMap
           ships={displayShips}
@@ -55,10 +76,30 @@ export default function CommandPage() {
           commandMode
           onSelectShip={(ship: Ship) => setSelectedShipId(ship.id)}
         />
-        {snapshotTimestamp && <div className="snapshotBanner">Playback {new Date(snapshotTimestamp).toLocaleTimeString()}</div>}
+        {snapshotTimestamp && (
+          <div className="snapshotBanner">
+            ⏱ PLAYBACK {new Date(snapshotTimestamp).toLocaleTimeString()}
+          </div>
+        )}
       </section>
+
       <aside className="rightRail">
+        <section className="panel" style={{ marginBottom: 16 }}>
+          <div className="panelTitleRow">
+            <h2 style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.18em', color: 'rgba(148,163,184,0.45)' }}>
+              ZONES
+            </h2>
+            <span className="badge badge-info">{zones.length} ACTIVE</span>
+          </div>
+          <p className="muted" style={{ fontSize: '12px', marginTop: 8 }}>
+            {zones.length === 0
+              ? 'No restricted zones defined. Use polygon tool on map.'
+              : `Tracking ${zones.length} restricted zone${zones.length === 1 ? '' : 's'}.`}
+          </p>
+        </section>
+
         <AlertPanel alerts={alerts} onAcknowledge={acknowledgeAlert} />
+
         <PlaybackSlider
           start={windowRange.start}
           end={windowRange.end}
@@ -67,10 +108,6 @@ export default function CommandPage() {
           onRequest={requestSnapshot}
           onClear={clearSnapshot}
         />
-        <section className="panel">
-          <h2>Zones</h2>
-          <p className="muted">{zones.length} active restricted zone{zones.length === 1 ? '' : 's'}.</p>
-        </section>
       </aside>
     </main>
   )

@@ -1,9 +1,9 @@
 import { ShipStatus } from '@/lib/types'
 
 const colors: Record<ShipStatus, string> = {
-  normal: '#00c8ff',
+  normal: '#00d4ff',
   rerouting: '#ffb800',
-  distressed: '#ff4444',
+  distressed: '#ff3355',
   stopped: '#9ca3af',
   stranded: '#ff0033',
   insufficient_fuel: '#ff8800',
@@ -13,7 +13,14 @@ const colors: Record<ShipStatus, string> = {
 
 export function ShipStatusBadge({ status }: { status: ShipStatus }) {
   return (
-    <span className="statusBadge" style={{ borderColor: colors[status], color: colors[status] }}>
+    <span
+      className="badge"
+      style={{
+        borderColor: colors[status],
+        color: colors[status],
+        background: `${colors[status]}15`,
+      }}
+    >
       {status.replaceAll('_', ' ').toUpperCase()}
     </span>
   )

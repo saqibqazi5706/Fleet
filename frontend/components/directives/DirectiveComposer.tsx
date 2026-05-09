@@ -36,26 +36,75 @@ export function DirectiveComposer({
   }
 
   return (
-    <section className="panel">
-      <h2>Directive</h2>
-      {!ship && <p className="muted">Select a ship to issue a directive.</p>}
-      {ship && (
-        <div className="stack">
-          <select value={mode} onChange={(event) => setMode(event.target.value as typeof mode)}>
-            <option value="CHANGE_DESTINATION">Change destination</option>
-            <option value="HOLD_POSITION">Hold position</option>
-            <option value="REROUTE_WAYPOINT">Reroute waypoint</option>
+    <section className="panel glass-subtle">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <h2 style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.18em', color: 'rgba(148,163,184,0.45)', margin: 0 }}>
+          DIRECTIVE COMPOSER
+        </h2>
+        {ship && <span className="badge badge-info">{ship.id}</span>}
+      </div>
+
+      {!ship ? (
+        <p className="muted" style={{ fontSize: '12px', textAlign: 'center', padding: '20px 0' }}>
+          Select a vessel to issue a directive
+        </p>
+      ) : (
+        <div className="directiveComposer">
+          <select
+            value={mode}
+            onChange={(event) => setMode(event.target.value as typeof mode)}
+            className="directiveSelect"
+            style={{ background: 'rgba(2,6,23,0.7)' }}
+          >
+            <option value="CHANGE_DESTINATION">✈ Change Destination</option>
+            <option value="HOLD_POSITION">⏸ Hold Position</option>
+            <option value="REROUTE_WAYPOINT">⎈ Reroute Waypoint</option>
           </select>
+
           {mode !== 'HOLD_POSITION' && (
-            <div className="inputGrid">
-              <input value={lat} onChange={(event) => setLat(event.target.value)} aria-label="Latitude" />
-              <input value={lng} onChange={(event) => setLng(event.target.value)} aria-label="Longitude" />
+            <div className="inputGrid" style={{ gap: '8px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <label style={{ fontSize: '10px', color: 'rgba(148,163,184,0.5)', letterSpacing: '0.08em' }}>LATITUDE</label>
+                <input
+                  value={lat}
+                  onChange={(event) => setLat(event.target.value)}
+                  placeholder="25.50"
+                  style={{ fontFamily: 'monospace' }}
+                />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <label style={{ fontSize: '10px', color: 'rgba(148,163,184,0.5)', letterSpacing: '0.08em' }}>LONGITUDE</label>
+                <input
+                  value={lng}
+                  onChange={(event) => setLng(event.target.value)}
+                  placeholder="54.75"
+                  style={{ fontFamily: 'monospace' }}
+                />
+              </div>
               {mode === 'CHANGE_DESTINATION' && (
-                <input value={name} onChange={(event) => setName(event.target.value)} aria-label="Destination name" />
+                <div style={{ gridColumn: '1 / -1', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: '10px', color: 'rgba(148,163,184,0.5)', letterSpacing: '0.08em' }}>DESTINATION NAME</label>
+                  <input
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    placeholder="Port name..."
+                    style={{ fontFamily: 'monospace' }}
+                  />
+                </div>
               )}
             </div>
           )}
-          <button className="primaryButton" onClick={send}>Send to {ship.id}</button>
+
+          <button
+            className="button button-primary"
+            onClick={send}
+            style={{ width: '100%', justifyContent: 'center', marginTop: 4 }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
+            </svg>
+            TRANSMIT TO {ship.id}
+          </button>
         </div>
       )}
     </section>

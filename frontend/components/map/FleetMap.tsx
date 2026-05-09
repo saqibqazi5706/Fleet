@@ -35,6 +35,7 @@ export default function FleetMap({
   const animFrameRef = useRef<number>(0)
   const tickStartRef = useRef<number>(Date.now())
   const drawRef = useRef<mapboxgl.IControl | null>(null)
+  const routesInitializedRef = useRef<boolean>(false)
 
   // Initialize map once
   useEffect(() => {
@@ -49,6 +50,7 @@ export default function FleetMap({
 
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
     map.on('load', () => {
+      // Restricted zones source
       map.addSource('restricted-zones', buildZoneSource([]))
       map.addLayer({
         id: 'restricted-zones-fill',
@@ -69,6 +71,106 @@ export default function FleetMap({
           'line-dasharray': [2, 2],
         },
       })
+
+      // Ship routes source — one source, multiple filtered layers
+      map.addSource('ship-routes', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+
+      // ── Direct route (ship has no waypoints — straight line to dest) ──
+      map.addLayer({
+        id: 'ship-route-direct',
+        type: 'line',
+        source: 'ship-routes',
+        filter: ['==', ['get', 'lineType'], 'direct'],
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': 1.5,
+          'line-opacity': 0.35,
+          'line-dasharray': [4, 3],
+        },
+      })
+
+      // ── Waypoint route (ship is actively detouring around a zone) ──
+      map.addLayer({
+        id: 'ship-route-waypoint',
+        type: 'line',
+        source: 'ship-routes',
+        filter: ['==', ['get', 'lineType'], 'waypoint'],
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': 2.5,
+          'line-opacity': 0.75,
+        },
+      })
+
+      // ── Waypoint dots ──────────────────────────────────────────────────
+      map.addLayer({
+        id: 'ship-waypoint-dot',
+        type: 'circle',
+        source: 'ship-routes',
+        filter: ['==', ['get', 'type'], 'waypoint'],
+        paint: {
+          'circle-radius': 4,
+          'circle-color': ['get', 'color'],
+          'circle-stroke-width': 1.5,
+          'circle-stroke-color': '#ffffff',
+          'circle-opacity': 0.9,
+        },
+      })
+
+      // ── Destination marker – outer glow ────────────────────────────────
+      map.addLayer({
+        id: 'ship-destination-outer',
+        type: 'circle',
+        source: 'ship-routes',
+        filter: ['==', ['get', 'type'], 'destination'],
+        paint: {
+          'circle-radius': 14,
+          'circle-color': ['get', 'color'],
+          'circle-opacity': 0.18,
+          'circle-stroke-width': 0,
+        },
+      })
+
+      // ── Destination marker – inner solid ──────────────────────────────
+      map.addLayer({
+        id: 'ship-destination-inner',
+        type: 'circle',
+        source: 'ship-routes',
+        filter: ['==', ['get', 'type'], 'destination'],
+        paint: {
+          'circle-radius': 6,
+          'circle-color': ['get', 'color'],
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#ffffff',
+          'circle-opacity': 0.95,
+        },
+      })
+
+      // ── Destination label ──────────────────────────────────────────────
+      map.addLayer({
+        id: 'ship-destination-label',
+        type: 'symbol',
+        source: 'ship-routes',
+        filter: ['==', ['get', 'type'], 'destination'],
+        layout: {
+          'text-field': ['get', 'portName'],
+          'text-font': ['DIN Offc Pro Medium', 'Arial Unicode MS Regular'],
+          'text-size': 10,
+          'text-offset': [0, 1.6],
+          'text-anchor': 'top',
+        },
+        paint: {
+          'text-color': ['get', 'color'],
+          'text-halo-color': '#000000',
+          'text-halo-width': 1.5,
+          'text-opacity': 0.85,
+        },
+      })
+
+      routesInitializedRef.current = true
     })
     mapRef.current = map
 
@@ -129,7 +231,7 @@ export default function FleetMap({
     source?.setData(buildZoneFeatureCollection(zones))
   }, [zones])
 
-  // Update markers when ships data changes
+  // Update markers and routes when ships data changes
   useEffect(() => {
     if (ships.length === 0) return
 
@@ -142,6 +244,12 @@ export default function FleetMap({
 
     const map = mapRef.current
     if (!map || !map.isStyleLoaded()) return
+
+    // Update route + destination layer
+    const routeSource = map.getSource('ship-routes') as mapboxgl.GeoJSONSource
+    if (routeSource) {
+      routeSource.setData(buildRoutesFeatureCollection(ships, selectedShipId ?? null))
+    }
 
     ships.forEach(ship => {
       if (!markersRef.current[ship.id]) {
@@ -246,29 +354,52 @@ function buildPopupHTML(ship: Ship): string {
   const fuelPercent = ((ship.fuel / ship.maxFuel) * 100).toFixed(1)
   const fuelColor = parseFloat(fuelPercent) < 15 ? '#FF8800' : '#00FF88'
 
+  const waypointsList = ship.route.slice(0, 4)
+    .map((wp, i) => `<li style="color:#94a3b8; font-size:11px; margin:2px 0">WP${i + 1}: ${wp.lat.toFixed(2)}°N, ${wp.lng.toFixed(2)}°E</li>`)
+    .join('')
+  const moreCount = ship.route.length - 4
+  const moreHtml = moreCount > 0 ? `<li style="color:#64748b; font-size:10px; font-style:italic">+${moreCount} more waypoints...</li>` : ''
+
   return `
     <div style="
       font-family: monospace;
       font-size: 12px;
       color: #fff;
       background: #1a1a2e;
-      padding: 10px;
-      border-radius: 6px;
-      min-width: 190px;
+      padding: 12px;
+      border-radius: 8px;
+      min-width: 220px;
       line-height: 1.6;
+      border: 1px solid rgba(0,212,255,0.15);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
     ">
-      <div style="font-weight:bold; font-size:14px; margin-bottom:6px; color:#00C8FF">
+      <div style="font-weight:bold; font-size:14px; margin-bottom:8px; color:#00d4ff; display:flex; align-items:center; gap:8px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L6 20L12 16L18 20L12 2Z"/></svg>
         ${ship.name}
       </div>
-      <div>ID: <span style="color:#888">${ship.id}</span></div>
-      <div>Status: <span style="color:${getStatusColor(ship.status)}">${ship.status.toUpperCase()}</span></div>
-      <div>Cargo: ${ship.cargo}</div>
-      <div>Speed: ${ship.speed} knots</div>
-      <div>Heading: ${Math.round(ship.heading)}°</div>
-      <div>Fuel: <span style="color:${fuelColor}">${ship.fuel.toFixed(0)}t (${fuelPercent}%)</span></div>
-      <div>Destination: ${ship.destination.name}</div>
-      <div style="margin-top:6px; color:#555; font-size:10px">
-        ${ship.lat.toFixed(4)}°N, ${ship.lng.toFixed(4)}°E
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; margin-bottom:8px; font-size:11px">
+        <div>ID: <span style="color:#888">${ship.id}</span></div>
+        <div>Status: <span style="color:${getStatusColor(ship.status)}">${ship.status.toUpperCase()}</span></div>
+        <div>Cargo: ${ship.cargo}</div>
+        <div>Speed: ${ship.speed} kt</div>
+        <div>Heading: ${Math.round(ship.heading)}°</div>
+        <div>Fuel: <span style="color:${fuelColor}">${ship.fuel.toFixed(0)}t (${fuelPercent}%)</span></div>
+      </div>
+      <div style="border-top:1px solid rgba(255,255,255,0.1); margin:8px 0; padding-top:8px">
+        <div style="color:#ffb800; font-weight:700; margin-bottom:6px; font-size:11px">▶ DESTINATION</div>
+        <div style="color:#fff; margin-bottom:4px">${ship.destination.name}</div>
+        <div style="color:#888; font-size:11px">${ship.destination.lat.toFixed(4)}°N, ${ship.destination.lng.toFixed(4)}°E</div>
+      </div>
+      ${ship.route.length > 0 ? `
+      <div>
+        <div style="color:#ffb800; font-weight:700; margin-bottom:4px; font-size:11px">⎈ DETOUR WAYPOINTS</div>
+        <ul style="margin:0; padding:0; list-style:none">
+          ${waypointsList}
+          ${moreHtml}
+        </ul>
+      </div>` : ''}
+      <div style="margin-top:8px; font-size:10px; color:#64748b; border-top:1px solid rgba(255,255,255,0.05); padding-top:6px">
+        ${ship.lat.toFixed(4)}°N, ${ship.lng.toFixed(4)}°E · Updated ${new Date(ship.lastUpdated).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
       </div>
     </div>
   `
@@ -296,4 +427,95 @@ function buildZoneFeatureCollection(zones: Zone[]): GeoJSON.FeatureCollection {
       },
     })),
   }
+}
+
+/**
+ * Build GeoJSON features for all ship routes and destination markers.
+ *
+ * For every non-arrived ship we always draw:
+ *   1. A line from the ship's current position → through any waypoints → to the destination.
+ *      - If the ship has active waypoints (zone detour), the line is "waypoint" style (solid, brighter).
+ *      - If the ship is going straight, the line is "direct" style (dashed, subtle).
+ *   2. A dot for each intermediate waypoint (zone detour only).
+ *   3. A circle + label at the destination port.
+ *
+ * When a ship is selected its route is rendered at full opacity / on top; the rest are dimmed.
+ */
+function buildRoutesFeatureCollection(ships: Ship[], selectedShipId: string | null): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = []
+  const hasSelection = selectedShipId !== null
+
+  ships.forEach(ship => {
+    // Don't draw routes for arrived ships
+    if (ship.status === 'arrived') return
+
+    const color = getStatusColor(ship.status)
+    const isSelected = ship.id === selectedShipId
+    // Dim non-selected ships when something is selected
+    const opacity = hasSelection && !isSelected ? 0.3 : 1.0
+
+    const hasWaypoints = ship.route && ship.route.length > 0
+
+    // ── Route line ─────────────────────────────────────────────────────────
+    // Always start from the ship's live position, pass through waypoints,
+    // and end at the destination.
+    const lineCoords: [number, number][] = [
+      [ship.lng, ship.lat],
+      ...(hasWaypoints ? ship.route.map(p => [p.lng, p.lat] as [number, number]) : []),
+      [ship.destination.lng, ship.destination.lat],
+    ]
+
+    features.push({
+      type: 'Feature',
+      properties: {
+        shipId: ship.id,
+        type: 'route',
+        lineType: hasWaypoints ? 'waypoint' : 'direct',
+        color,
+        opacity,
+      },
+      geometry: {
+        type: 'LineString',
+        coordinates: lineCoords,
+      },
+    })
+
+    // ── Intermediate waypoint dots (only when detouring) ──────────────────
+    if (hasWaypoints) {
+      ship.route.forEach((wp, i) => {
+        features.push({
+          type: 'Feature',
+          properties: {
+            shipId: ship.id,
+            type: 'waypoint',
+            index: i + 1,
+            color,
+            opacity,
+          },
+          geometry: {
+            type: 'Point',
+            coordinates: [wp.lng, wp.lat],
+          },
+        })
+      })
+    }
+
+    // ── Destination marker ────────────────────────────────────────────────
+    features.push({
+      type: 'Feature',
+      properties: {
+        shipId: ship.id,
+        type: 'destination',
+        portName: ship.destination.name,
+        color,
+        opacity,
+      },
+      geometry: {
+        type: 'Point',
+        coordinates: [ship.destination.lng, ship.destination.lat],
+      },
+    })
+  })
+
+  return { type: 'FeatureCollection', features }
 }

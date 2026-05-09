@@ -1,7 +1,9 @@
 import * as rawData from './fleet.json'
 import { FleetScenario, Ship } from '../types'
 
-const scenario = rawData as FleetScenario
+// fleet.json now carries `waterPolygons` (array of two polygons: Persian Gulf + Gulf of Oman)
+// as well as the legacy `navigableWater` (Persian Gulf only, kept for backward compat).
+const scenario = rawData as FleetScenario & { waterPolygons?: [number, number][][] }
 
 const portMap: Record<string, { id: string; name: string; lat: number; lng: number }> = {}
 
@@ -15,6 +17,17 @@ scenario.ports.forEach((port) => {
 })
 
 export const navigableWater: [number, number][] = scenario.navigableWater
+
+/**
+ * Two corrected water polygons covering:
+ *   [0] Persian Gulf (including Hormuz north channel)
+ *   [1] Gulf of Oman (including Hormuz east exit + Sohar/Muscat coast)
+ *
+ * Use `isInWater(lat, lng)` to test whether a point is in navigable water.
+ */
+export const waterPolygons: [number, number][][] =
+  scenario.waterPolygons ?? [scenario.navigableWater]
+
 export const ports = portMap
 
 export const initialFleet: Ship[] = scenario.fleet.map((raw) => {

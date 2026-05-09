@@ -1,30 +1,38 @@
-version: '3.8'
+version: '3.9'
 
 services:
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_BACKEND_URL=http://localhost:4000
-    depends_on:
-      - backend
-
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    build: ./Back
     ports:
-      - "4000:4000"
+      - '4000:4000'
     environment:
-      - PORT=4000
-      - FRONTEND_URL=http://localhost:3000
-    depends_on:
-      - redis
+      PORT: 4000
+      FRONTEND_URL: http://localhost:3000
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPEN_METEO_URL: https://api.open-meteo.com/v1/forecast
+      # Optional – leave blank to disable Supabase persistence
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:-}
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:4000/health']
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  redis:
-    image: redis:alpine
+  frontend:
+    build: ./Front
     ports:
-      - "6379:6379"
+      - '3000:3000'
+    environment:
+      NEXT_PUBLIC_BACKEND_URL: http://localhost:4000
+      NEXT_PUBLIC_MAPBOX_TOKEN: ${NEXT_PUBLIC_MAPBOX_TOKEN}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # Optional – leave blank if not using Supabase / Clerk
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:-}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:-}
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+    depends_on:
+      backend:
+        condition: service_healthy
