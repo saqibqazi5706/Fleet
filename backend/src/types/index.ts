@@ -41,6 +41,62 @@ export interface Ship {
   lastUpdated: number
 }
 
+export type AlertType =
+  | 'GEOFENCE_BREACH'
+  | 'PROXIMITY_WARNING'
+  | 'STRANDED'
+  | 'INSUFFICIENT_FUEL'
+  | 'OUT_OF_FUEL'
+
+export type Severity = 'low' | 'medium' | 'high' | 'critical'
+
+export interface Zone {
+  id: string
+  coordinates: [number, number][]
+  label: string
+  createdAt: number
+}
+
+export interface Alert {
+  id: string
+  type: AlertType
+  severity: Severity
+  shipId: string
+  message: string
+  active: boolean
+  acknowledged: boolean
+  createdAt: number
+}
+
+export interface Directive {
+  id: string
+  shipId: string
+  fromCommand: true
+  type: 'CHANGE_DESTINATION' | 'HOLD_POSITION' | 'REROUTE_WAYPOINT'
+  payload: {
+    destination?: { lat: number; lng: number; name: string }
+    waypoint?: { lat: number; lng: number }
+  }
+  sentAt: number
+}
+
+export interface DistressParseResult {
+  shipId: string
+  raw: string
+  severity: Severity
+  issueType: string
+  injuries: number
+  damageEstimate: 'none' | 'minor' | 'moderate' | 'major' | 'total_loss'
+  impact: string
+  recommendedAction: string
+  parsedAt: number
+}
+
+export interface Snapshot {
+  timestamp: number
+  ships: Ship[]
+}
+
 export interface FleetScenario {
   scenario: { name: string; description: string }
   coordinateFormat: string

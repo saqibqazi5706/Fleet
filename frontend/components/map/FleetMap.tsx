@@ -2,16 +2,31 @@
 
 import { useEffect, useRef } from 'react'
 import mapboxgl from 'mapbox-gl'
+import MapboxDraw from '@mapbox/mapbox-gl-draw'
 import 'mapbox-gl/dist/mapbox-gl.css'
-import { Ship } from '@/lib/socket/useFleetState'
+import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css'
+import { Ship, Zone } from '@/lib/types'
+import { getSocket } from '@/lib/socket/socketClient'
 
 mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN!
 
 interface FleetMapProps {
   ships: Ship[]
+  zones?: Zone[]
+  selectedShipId?: string | null
+  captainShipId?: string
+  commandMode?: boolean
+  onSelectShip?: (ship: Ship) => void
 }
 
-export default function FleetMap({ ships }: FleetMapProps) {
+export default function FleetMap({
+  ships,
+  zones = [],
+  selectedShipId,
+  captainShipId,
+  commandMode = false,
+  onSelectShip,
+}: FleetMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<mapboxgl.Map | null>(null)
   const markersRef = useRef<Record<string, mapboxgl.Marker>>({})
@@ -19,6 +34,7 @@ export default function FleetMap({ ships }: FleetMapProps) {
   const prevShipsRef = useRef<Record<string, { lat: number; lng: number }>>({})
   const animFrameRef = useRef<number>(0)
   const tickStartRef = useRef<number>(Date.now())
+  const drawRef = useRef<mapboxgl.IControl | null>(null)
 
   // Initialize map once
   useEffect(() => {
@@ -32,6 +48,28 @@ export default function FleetMap({ ships }: FleetMapProps) {
     })
 
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    map.on('load', () => {
+      map.addSource('restricted-zones', buildZoneSource([]))
+      map.addLayer({
+        id: 'restricted-zones-fill',
+        type: 'fill',
+        source: 'restricted-zones',
+        paint: {
+          'fill-color': '#ff3344',
+          'fill-opacity': 0.18,
+        },
+      })
+      map.addLayer({
+        id: 'restricted-zones-line',
+        type: 'line',
+        source: 'restricted-zones',
+        paint: {
+          'line-color': '#ff6677',
+          'line-width': 2,
+          'line-dasharray': [2, 2],
+        },
+      })
+    })
     mapRef.current = map
 
     return () => {
@@ -39,6 +77,57 @@ export default function FleetMap({ ships }: FleetMapProps) {
       cancelAnimationFrame(animFrameRef.current)
     }
   }, [])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !commandMode || drawRef.current) return
+
+    const draw = new MapboxDraw({
+      displayControlsDefault: false,
+      controls: {
+        polygon: true,
+        trash: true,
+      },
+    })
+    drawRef.current = draw as mapboxgl.IControl
+    map.addControl(draw, 'top-left')
+
+    const syncDrawnZone = (event: { features: Array<{ id?: string | number; geometry?: { coordinates?: number[][][] } }> }) => {
+      event.features.forEach((feature) => {
+        const ring = feature.geometry?.coordinates?.[0]
+        if (!ring || ring.length < 4) return
+        const id = String(feature.id || `zone:${Date.now()}`)
+        getSocket().emit('create_zone', {
+          id,
+          coordinates: ring.slice(0, -1).map((coord) => [coord[1], coord[0]]),
+          label: 'Command restricted zone',
+        })
+      })
+    }
+
+    map.on('draw.create', syncDrawnZone)
+    map.on('draw.update', syncDrawnZone)
+
+    return () => {
+      map.off('draw.create', syncDrawnZone)
+      map.off('draw.update', syncDrawnZone)
+      if (drawRef.current) {
+        try {
+          map.removeControl(drawRef.current)
+        } catch {
+          // Mapbox Draw can already be detached during React dev remounts.
+        }
+        drawRef.current = null
+      }
+    }
+  }, [commandMode])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !map.isStyleLoaded()) return
+    const source = map.getSource('restricted-zones') as mapboxgl.GeoJSONSource | undefined
+    source?.setData(buildZoneFeatureCollection(zones))
+  }, [zones])
 
   // Update markers when ships data changes
   useEffect(() => {
@@ -56,7 +145,8 @@ export default function FleetMap({ ships }: FleetMapProps) {
 
     ships.forEach(ship => {
       if (!markersRef.current[ship.id]) {
-        const el = createShipElement(ship)
+        const el = createShipElement(ship, selectedShipId === ship.id, captainShipId === ship.id)
+        el.addEventListener('click', () => onSelectShip?.(ship))
         const marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
           .setLngLat([ship.lng, ship.lat])
           .setPopup(
@@ -72,9 +162,10 @@ export default function FleetMap({ ships }: FleetMapProps) {
         const el = markersRef.current[ship.id].getElement()
         const svg = el.querySelector('svg')
         if (svg) svg.style.transform = `rotate(${ship.heading}deg)`
+        updateShipElement(el, ship, selectedShipId === ship.id, captainShipId === ship.id)
       }
     })
-  }, [ships])
+  }, [ships, selectedShipId, captainShipId, onSelectShip])
 
   // Interpolation animation loop
   useEffect(() => {
@@ -105,13 +196,20 @@ export default function FleetMap({ ships }: FleetMapProps) {
   )
 }
 
-function createShipElement(ship: Ship): HTMLDivElement {
+function createShipElement(ship: Ship, selected: boolean, captainShip: boolean): HTMLDivElement {
   const el = document.createElement('div')
+  updateShipElement(el, ship, selected, captainShip)
+  el.title = ship.name
+  return el
+}
+
+function updateShipElement(el: HTMLElement, ship: Ship, selected: boolean, captainShip: boolean) {
   el.style.cssText = `
-    width: 28px;
-    height: 28px;
+    width: ${selected || captainShip ? 34 : 28}px;
+    height: ${selected || captainShip ? 34 : 28}px;
     cursor: pointer;
-    filter: drop-shadow(0 0 6px rgba(0,200,255,0.8));
+    opacity: ${captainShip || !selected ? 1 : 0.86};
+    filter: drop-shadow(0 0 ${selected || captainShip ? 12 : 6}px ${getStatusColor(ship.status)}cc);
   `
   el.innerHTML = `
     <svg
@@ -124,12 +222,10 @@ function createShipElement(ship: Ship): HTMLDivElement {
         d="M12 2L6 20L12 16L18 20L12 2Z"
         fill="${getStatusColor(ship.status)}"
         stroke="white"
-        stroke-width="1"
+        stroke-width="${selected || captainShip ? 2 : 1}"
       />
     </svg>
   `
-  el.title = ship.name
-  return el
 }
 
 function getStatusColor(status: string): string {
@@ -176,4 +272,28 @@ function buildPopupHTML(ship: Ship): string {
       </div>
     </div>
   `
+}
+
+function buildZoneSource(zones: Zone[]): mapboxgl.GeoJSONSourceSpecification {
+  return {
+    type: 'geojson',
+    data: buildZoneFeatureCollection(zones),
+  }
+}
+
+function buildZoneFeatureCollection(zones: Zone[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: zones.map((zone) => ({
+      type: 'Feature',
+      properties: { id: zone.id, label: zone.label },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[
+          ...zone.coordinates.map((coord) => [coord[1], coord[0]]),
+          [zone.coordinates[0][1], zone.coordinates[0][0]],
+        ]],
+      },
+    })),
+  }
 }
