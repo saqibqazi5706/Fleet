@@ -47,10 +47,9 @@ PORT=4000
 FRONTEND_URL=http://localhost:3000
 OPEN_METEO_URL=https://api.open-meteo.com/v1/forecast
 DEMO_TIME_SCALE=20
-GEMINI_API_KEY=
 AI_PROVIDER=gemini
-SUPABASE_URL=
-SUPABASE_SECRET_KEY=
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-1.5-flash
 ```
 
 Frontend:
@@ -58,13 +57,65 @@ Frontend:
 ```env
 NEXT_PUBLIC_BACKEND_URL=http://localhost:4000
 NEXT_PUBLIC_MAPBOX_TOKEN=
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
-CLERK_SECRET_KEY=
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
-SUPABASE_SECRET_KEY=
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ```
+
+## Deployment
+
+This demo deploys without Clerk or Supabase. Keep all live behavior on the backend simulator and Socket.IO.
+
+### Railway Backend
+
+Create a Railway project from this GitHub repository and set the service root directory to:
+
+```text
+backend
+```
+
+Railway will use `backend/railway.json`.
+
+Set these Railway environment variables:
+
+```env
+NODE_ENV=production
+FRONTEND_URL=https://your-vercel-app.vercel.app
+AI_PROVIDER=gemini
+GEMINI_API_KEY=your_real_gemini_key
+GEMINI_MODEL=gemini-1.5-flash
+DEMO_TIME_SCALE=20
+OPEN_METEO_URL=https://api.open-meteo.com/v1/forecast
+```
+
+Do not set `PORT`; Railway provides it automatically.
+
+After deploy, verify:
+
+```text
+https://your-railway-backend.up.railway.app/health
+https://your-railway-backend.up.railway.app/debug/routes
+```
+
+### Vercel Frontend
+
+Create a Vercel project from this GitHub repository and set the project root directory to:
+
+```text
+frontend
+```
+
+Vercel will use `frontend/vercel.json`.
+
+Set these Vercel environment variables:
+
+```env
+NEXT_PUBLIC_BACKEND_URL=https://your-railway-backend.up.railway.app
+NEXT_PUBLIC_MAPBOX_TOKEN=your_mapbox_public_token
+NEXT_PUBLIC_SITE_URL=https://your-vercel-app.vercel.app
+```
+
+Do not put `GEMINI_API_KEY` in Vercel. Gemini is backend-only.
+
+After the Vercel URL is created, copy it into Railway as `FRONTEND_URL` and redeploy/restart the Railway backend so CORS and Socket.IO allow the deployed frontend.
 
 ## Demo Flow
 
