@@ -34,14 +34,19 @@ dotenv.config()
 const app = express()
 const httpServer = createServer(app)
 
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000'
+
+const corsOptions = {
+  origin: FRONTEND_URL,
+  methods: ['GET', 'POST'],
+  credentials: true,
+}
+
 const io = new Server(httpServer, {
-  cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-    methods: ['GET', 'POST'],
-  },
+  cors: corsOptions,
 })
 
-app.use(cors())
+app.use(cors(corsOptions))
 app.use(express.json())
 
 // Health check
@@ -374,9 +379,9 @@ setInterval(() => {
 
 // Start server
 const PORT = parseInt(process.env.PORT || '4000', 10)
-httpServer.listen(PORT, () => {
-  console.log(`Backend running on http://localhost:${PORT}`)
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`Backend running on port ${PORT}`)
   console.log(`[Simulator] Demo time scale: ${DEMO_TIME_SCALE}x`)
-  console.log(`Health check: http://localhost:${PORT}/health`)
-  console.log(`Fleet state: http://localhost:${PORT}/fleet`)
+  console.log(`Health check: /health`)
+  console.log(`Fleet state: /fleet`)
 })

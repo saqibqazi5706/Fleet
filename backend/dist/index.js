@@ -21,13 +21,16 @@ const router_1 = require("./routing/router");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const httpServer = (0, http_1.createServer)(app);
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
+const corsOptions = {
+    origin: FRONTEND_URL,
+    methods: ['GET', 'POST'],
+    credentials: true,
+};
 const io = new socket_io_1.Server(httpServer, {
-    cors: {
-        origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-        methods: ['GET', 'POST'],
-    },
+    cors: corsOptions,
 });
-app.use((0, cors_1.default)());
+app.use((0, cors_1.default)(corsOptions));
 app.use(express_1.default.json());
 // Health check
 app.get('/health', (_req, res) => {
@@ -313,9 +316,9 @@ setInterval(() => {
 }, TICK_INTERVAL_MS);
 // Start server
 const PORT = parseInt(process.env.PORT || '4000', 10);
-httpServer.listen(PORT, () => {
-    console.log(`Backend running on http://localhost:${PORT}`);
+httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log(`Backend running on port ${PORT}`);
     console.log(`[Simulator] Demo time scale: ${DEMO_TIME_SCALE}x`);
-    console.log(`Health check: http://localhost:${PORT}/health`);
-    console.log(`Fleet state: http://localhost:${PORT}/fleet`);
+    console.log(`Health check: /health`);
+    console.log(`Fleet state: /fleet`);
 });
