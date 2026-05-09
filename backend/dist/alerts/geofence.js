@@ -18,7 +18,9 @@ function checkGeofences(ships, zones) {
         });
         if (alert)
             alerts.push(alert);
-        return ship.status === 'out_of_fuel' ? ship : { ...ship, status: 'rerouting' };
+        return ship.status === 'out_of_fuel'
+            ? ship
+            : { ...ship, status: 'restricted_zone_breach' };
     });
     return { ships: updatedShips, alerts };
 }

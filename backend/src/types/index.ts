@@ -38,6 +38,10 @@ export interface Ship {
   cargo: string
   status: ShipStatus
   inAdverseWeather: boolean
+  fuelReachable?: boolean
+  routeDistanceKm?: number
+  estimatedFuelRequiredTons?: number
+  fuelShortfallTons?: number
   route: Position[]
   lastUpdated: number
 }
@@ -50,6 +54,7 @@ export type AlertType =
   | 'OUT_OF_FUEL'
   | 'DISTRESS'
   | 'WEATHER_RISK'
+  | 'ROUTE_REROUTE'
   | 'ARRIVAL'
 
 export type Severity = 'low' | 'medium' | 'high' | 'critical'
@@ -111,6 +116,8 @@ export interface WeatherState {
   adverse: boolean
   windspeed10m: number | null
   waveHeight: number | null
+  fuelPenaltyMultiplier: number
+  adverseZone: Zone | null
   updatedAt: number
   source: 'open-meteo' | 'fallback'
 }
@@ -120,6 +127,7 @@ export interface FleetStatePayload {
   zones: Zone[]
   alerts: Alert[]
   weather: WeatherState
+  demoTimeScale?: number
   timestamp: number
 }
 

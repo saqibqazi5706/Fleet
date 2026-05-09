@@ -201,6 +201,16 @@ textarea {
   border-color: rgba(0, 200, 255, 0.35);
 }
 
+.audioArmed {
+  color: #00ff9d;
+  border-color: rgba(0, 255, 157, 0.45);
+}
+
+.audioMuted {
+  color: #facc15;
+  border-color: rgba(250, 204, 21, 0.5);
+}
+
 .alertItem,
 .directiveItem {
   padding: 10px;
@@ -271,6 +281,41 @@ textarea {
 
 .wide {
   width: 100%;
+}
+
+.volumeControl {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.volumeControl input {
+  padding: 0;
+}
+
+.distressNow {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 10px;
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.42);
+  border: 1px solid rgba(255, 51, 68, 0.55);
+  border-radius: 8px;
+  box-shadow: 0 0 24px rgba(255, 51, 68, 0.14);
+}
+
+.distressNow strong {
+  color: #ff6b7a;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.distressNow span {
+  color: #fee2e2;
+  font-size: 12px;
 }
 
 select,

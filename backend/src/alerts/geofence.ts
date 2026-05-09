@@ -21,7 +21,9 @@ export function checkGeofences(ships: Ship[], zones: Zone[]): { ships: Ship[]; a
     })
     if (alert) alerts.push(alert)
 
-    return ship.status === 'out_of_fuel' ? ship : { ...ship, status: 'rerouting' as const }
+    return ship.status === 'out_of_fuel'
+      ? ship
+      : { ...ship, status: 'restricted_zone_breach' as const }
   })
 
   return { ships: updatedShips, alerts }

@@ -47,3 +47,15 @@ export function acknowledgeAlert(alertId: string): Alert | null {
 
   return null
 }
+
+export function updateAlert(alertId: string, patch: Partial<Omit<Alert, 'id' | 'createdAt'>>): Alert | null {
+  for (const [key, alert] of alerts.entries()) {
+    if (alert.id === alertId) {
+      const updated = { ...alert, ...patch }
+      alerts.set(key, updated)
+      return updated
+    }
+  }
+
+  return null
+}

@@ -2,6 +2,7 @@
 
 import dynamic from 'next/dynamic'
 import { useMemo, useState } from 'react'
+import { EmergencyAudioControls } from '@/components/alerts/EmergencyAudioControls'
 import { AlertPanel } from '@/components/alerts/AlertPanel'
 import { AIDistressResult } from '@/components/directives/AIDistressResult'
 import { DirectiveComposer } from '@/components/directives/DirectiveComposer'
@@ -45,7 +46,7 @@ export default function CommandPage() {
       <aside className="leftRail">
         <ShipDetailCard ship={selectedShip} />
         <DirectiveComposer ship={selectedShip} onSend={sendDirective} />
-        <AIDistressResult results={distressResults} />
+        <AIDistressResult results={distressResults} alerts={alerts} />
       </aside>
       <section className="mapStage">
         <FleetMap
@@ -58,6 +59,7 @@ export default function CommandPage() {
         {snapshotTimestamp && <div className="snapshotBanner">Playback {new Date(snapshotTimestamp).toLocaleTimeString()}</div>}
       </section>
       <aside className="rightRail">
+        <EmergencyAudioControls alerts={alerts} />
         <AlertPanel alerts={alerts} onAcknowledge={acknowledgeAlert} />
         <PlaybackSlider
           start={windowRange.start}

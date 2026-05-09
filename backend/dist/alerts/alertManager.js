@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getAlerts = getAlerts;
 exports.createAlert = createAlert;
 exports.acknowledgeAlert = acknowledgeAlert;
+exports.updateAlert = updateAlert;
 const alerts = new Map();
 function getAlerts() {
     return Array.from(alerts.values()).sort((a, b) => b.createdAt - a.createdAt);
@@ -31,6 +32,16 @@ function acknowledgeAlert(alertId) {
     for (const [key, alert] of alerts.entries()) {
         if (alert.id === alertId) {
             const updated = { ...alert, acknowledged: true, active: false };
+            alerts.set(key, updated);
+            return updated;
+        }
+    }
+    return null;
+}
+function updateAlert(alertId, patch) {
+    for (const [key, alert] of alerts.entries()) {
+        if (alert.id === alertId) {
+            const updated = { ...alert, ...patch };
             alerts.set(key, updated);
             return updated;
         }

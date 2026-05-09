@@ -17,8 +17,17 @@ function checkProximity(ships) {
                 type: 'PROXIMITY_WARNING',
                 severity: distance < 1 ? 'high' : 'medium',
                 shipId: a.id,
+                relatedShipId: b.id,
                 message: `${a.name} and ${b.name} are ${distance.toFixed(2)}km apart`,
                 dedupeKey: `PROXIMITY_WARNING:${[a.id, b.id].sort().join(':')}`,
+                metadata: {
+                    distressSignal: true,
+                    distanceKm: Number(distance.toFixed(3)),
+                    ships: [
+                        { id: a.id, name: a.name, lat: a.lat, lng: a.lng },
+                        { id: b.id, name: b.name, lat: b.lat, lng: b.lng },
+                    ],
+                },
             });
             if (alert)
                 alerts.push(alert);

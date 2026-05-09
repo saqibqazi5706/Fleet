@@ -46,7 +46,9 @@ Backend:
 PORT=4000
 FRONTEND_URL=http://localhost:3000
 OPEN_METEO_URL=https://api.open-meteo.com/v1/forecast
-ANTHROPIC_API_KEY=
+DEMO_TIME_SCALE=20
+GEMINI_API_KEY=
+AI_PROVIDER=gemini
 SUPABASE_URL=
 SUPABASE_SECRET_KEY=
 ```
@@ -78,6 +80,7 @@ NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ## Assumptions
 
 - The backend is the single source of truth for ships, zones, alerts, directives, weather, and playback.
+- `DEMO_TIME_SCALE` accelerates backend simulation time for demos while preserving the 1Hz WebSocket broadcast and backend-owned state. Use `20` for visible ship movement during judging; omit it for real-time movement.
 - Weather uses one Open-Meteo point for the whole operational area. If the API fails, adverse weather is enabled so the fuel penalty remains demonstrable.
 - Supabase persistence is fire-and-forget and stubbed unless real credentials are configured.
 - Claude distress parsing falls back to deterministic keyword parsing if the API key is missing, slow, or rate limited.

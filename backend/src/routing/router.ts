@@ -1,15 +1,13 @@
 /**
  * Water-only routing for the Strait of Hormuz fleet simulator.
  *
- * Strategy:
- * 1. Build a static base graph at module load time using a 0.1 degree grid
- *    filtered to the navigableWater polygon + polygon vertices + ports +
- *    curated strait waypoints.
- * 2. Pre-compute adjacency list between nearby nodes that pass segment-in-water
- *    validation (no zones at build time).
- * 3. For each route query, inject start + destination + zone detour offsets as
- *    temporary nodes and run Dijkstra, skipping edges that cross active zones.
- * 4. Simplify the resulting path greedily.
+ * Mapbox is only the basemap. The backend owns route decisions.
+ * Rules:
+ * - stay inside fleet.json navigableWater
+ * - avoid restricted zones
+ * - avoid obvious Mapbox land using static visual land masks
+ * - use sea-lane corridor points around Strait of Hormuz
+ * - allow first escape edge if ship starts inside a restricted zone
  */
 
 import { navigableWater, ports } from '../data/fleetLoader'
@@ -23,83 +21,139 @@ import {
   routeIntersectsPolygon,
 } from './geometry'
 
-// ─── tuning ───────────────────────────────────────────────────────────────────
-const GRID_STEP_DEGREES = 0.15   // ~11 km per step — fine enough for the narrow strait
-const MAX_EDGE_KM       = 35     // max segment length; keeps edges from skipping the peninsula
-const SAMPLE_STEP_KM    = 2      // sample density for in-water validation
-const NEIGHBOR_COUNT    = 12     // k-nearest considered per base node
-const ZONE_MARGIN_DEG   = 0.12   // offset around zone bounding boxes for detour seeds
+const GRID_STEP_DEGREES = 0.09
+const MAX_EDGE_KM = 15
+const SAMPLE_STEP_KM = 0.6
+const NEIGHBOR_COUNT = 34
+const ZONE_MARGIN_DEG = 0.14
+const STRAIT_CORRIDOR_RADIUS_KM = 42
 
-// Visual landmasks for coastline areas that the provided navigableWater polygon
-// includes too broadly. These keep demo routes off obvious Mapbox land while the
-// hackathon-provided polygon remains the primary operating boundary.
+interface GraphNode {
+  lat: number
+  lng: number
+}
+
+interface Edge {
+  to: number
+  km: number
+}
+
 const STATIC_LAND_EXCLUSIONS: [number, number][][] = [
   [
-    [26.44, 56.20],
-    [26.34, 56.46],
-    [26.08, 56.56],
-    [25.70, 56.48],
-    [25.28, 56.08],
-    [25.08, 55.70],
-    [25.32, 55.52],
-    [25.78, 55.72],
-    [26.15, 55.96],
+    [25.18, 53.35], [25.12, 54.35], [25.12, 55.18], [24.98, 55.96],
+    [24.72, 56.52], [24.34, 56.78], [23.62, 57.08], [23.38, 56.10],
+    [23.52, 54.62], [24.10, 53.52],
+  ],
+  [
+    [25.42, 55.05], [25.10, 55.72], [24.75, 56.25], [24.45, 56.42],
+    [24.23, 56.05], [24.30, 55.35], [24.66, 54.86], [25.12, 54.72],
+  ],
+  [
+    [26.84, 56.30], [26.72, 56.55], [26.54, 56.56], [26.50, 56.42],
+    [26.66, 56.18],
   ],
 ]
 
-// ─── base graph (built once) ──────────────────────────────────────────────────
+const SEA_LANE_POINTS: Position[] = [
+  p(29.48, 48.34), p(29.10, 48.80), p(28.70, 49.25), p(28.25, 49.70),
+  p(27.80, 50.15), p(27.32, 50.55), p(26.95, 50.92), p(26.58, 51.18),
+  p(26.22, 51.55), p(25.88, 52.00), p(25.68, 52.48), p(25.55, 53.05),
+  p(25.56, 53.62), p(25.70, 54.12), p(25.94, 54.62), p(26.15, 55.10),
+  p(26.32, 55.48), p(26.48, 55.78), p(26.55, 56.02), p(26.48, 56.25),
+  p(26.28, 56.47), p(26.02, 56.68), p(25.72, 56.92), p(25.38, 57.20),
+  p(25.02, 57.55), p(24.66, 57.92), p(24.28, 58.28), p(23.92, 58.58),
+  p(23.45, 58.88), p(22.95, 59.25), p(22.50, 59.65),
 
-interface GraphNode { lat: number; lng: number }
-interface Edge { to: number; km: number }
+  p(25.22, 54.18), p(25.35, 54.45), p(25.50, 54.75), p(25.72, 55.08),
+  p(25.98, 55.38), p(26.22, 55.62), p(26.42, 55.86),
+
+  p(25.46, 51.95), p(25.72, 51.58), p(26.05, 51.10), p(26.40, 50.75),
+  p(26.56, 50.30), p(26.50, 50.55),
+
+  p(24.72, 57.02), p(24.92, 57.35), p(24.98, 57.75), p(24.72, 58.10),
+  p(24.32, 58.40), p(23.92, 58.58),
+
+  p(26.62, 56.11), p(26.50, 56.18), p(26.40, 56.34), p(26.22, 56.50),
+]
 
 const BASE_NODES: GraphNode[] = buildBaseNodes()
-const BASE_EDGES: Edge[][]    = buildBaseEdges(BASE_NODES)
+const BASE_EDGES: Edge[][] = buildBaseEdges(BASE_NODES)
 
 console.log(
   `[Router] Base graph ready: ${BASE_NODES.length} nodes, ` +
   `${BASE_EDGES.reduce((s, e) => s + e.length, 0)} edges`
 )
 
-// ─── public API ───────────────────────────────────────────────────────────────
-
 export interface RouteResult {
   route: Position[]
   distanceKm: number
+  avoidedSoftZones?: boolean
 }
 
-export function computeRoute(ship: Ship, zones: Zone[]): RouteResult | null {
-  const start: Position = { lat: ship.lat,             lng: ship.lng }
-  const dest:  Position = { lat: ship.destination.lat, lng: ship.destination.lng }
+export function computeRoute(ship: Ship, zones: Zone[], softAvoidZones: Zone[] = []): RouteResult | null {
+  return computeRouteAttempt(ship, zones, softAvoidZones) || computeRouteAttempt(ship, zones, [])
+}
 
-  // Snap start to water if slightly outside (e.g. port position rounding)
+function computeRouteAttempt(ship: Ship, zones: Zone[], softAvoidZones: Zone[]): RouteResult | null {
+  const start: Position = { lat: ship.lat, lng: ship.lng }
+  const dest: Position = { lat: ship.destination.lat, lng: ship.destination.lng }
+  const routingZones = [...zones, ...softAvoidZones]
+
   const effectiveStart = isLegalWaterPoint(start) ? start : snapToNearestWaterNode(start)
   if (!effectiveStart) return null
   if (!isLegalWaterPoint(dest)) return null
   if (zones.some(z => pointInPolygon(dest, z.coordinates))) return null
 
+  const startInsideZones = routingZones
+    .filter(z => pointInPolygon(effectiveStart, z.coordinates))
+    .map(z => z.id)
+
   const directDistance = distanceKm(effectiveStart, dest)
-  // Fast path only for short final hops; longer voyages should use the graph so
-  // they do not visually cut across the Musandam coastline.
-  if (directDistance <= MAX_EDGE_KM && isSegmentLegal(effectiveStart, dest, zones)) {
-    return { route: [], distanceKm: distanceKm(effectiveStart, dest) }
+
+  if (
+    directDistance <= MAX_EDGE_KM &&
+    isSegmentLegalForQuery(effectiveStart, dest, routingZones, startInsideZones, true)
+  ) {
+    console.log(`[Router] Direct route ${ship.id} ${directDistance.toFixed(1)}km`)
+    return { route: [], distanceKm: directDistance, avoidedSoftZones: softAvoidZones.length > 0 }
   }
 
-  const path = dijkstra(effectiveStart, dest, zones)
-  if (!path) return null
+  const path = dijkstra(effectiveStart, dest, routingZones, startInsideZones)
+  if (!path) {
+    console.warn(`[Router] Route rejected for ${ship.id} to ${ship.destination.name}`)
+    return null
+  }
 
-  // Waypoints are everything between start and dest
   const waypoints = path.slice(1, -1)
+
   return {
     route: waypoints,
     distanceKm: pathKm([effectiveStart, ...waypoints, dest]),
+    avoidedSoftZones: softAvoidZones.length > 0,
+  }
+}
+
+export function getRouterGraphDebug() {
+  return {
+    nodeCount: BASE_NODES.length,
+    edgeCount: BASE_EDGES.reduce((sum, edges) => sum + edges.length, 0),
+    maxEdgeKm: MAX_EDGE_KM,
+    sampleStepKm: SAMPLE_STEP_KM,
+    gridStepDegrees: GRID_STEP_DEGREES,
+    seaLanePointCount: SEA_LANE_POINTS.length,
+    landMaskCount: STATIC_LAND_EXCLUSIONS.length,
   }
 }
 
 export function isRouteValid(ship: Ship, zones: Zone[]): boolean {
   const pts = routePoints(ship)
   if (pts.length < 2) return false
+  const startInsideZones = zones
+    .filter(zone => pointInPolygon(pts[0], zone.coordinates))
+    .map(zone => zone.id)
+
   return pts.every(p => isLegalWaterPoint(p)) &&
-    pts.slice(0, -1).every((p, i) => isSegmentLegal(p, pts[i + 1], zones))
+    pts.slice(0, -1).every((p, i) => isSegmentLegalForQuery(p, pts[i + 1], zones, startInsideZones, i === 0))
 }
 
 export function routeDistanceKm(ship: Ship): number {
@@ -110,24 +164,72 @@ export function isInsideNavigableWater(p: Position): boolean {
   return pointInPolygon(p, navigableWater)
 }
 
-// ─── Dijkstra ─────────────────────────────────────────────────────────────────
+export function validateRouteSegments(
+  ship: Ship,
+  zones: Zone[]
+): Array<{ from: Position; to: Position; reason: string }> {
+  const pts = routePoints(ship)
+  const errors: Array<{ from: Position; to: Position; reason: string }> = []
+  const startInsideZones = zones
+    .filter(zone => pointInPolygon(pts[0], zone.coordinates))
+    .map(zone => zone.id)
 
-function dijkstra(start: Position, dest: Position, zones: Zone[]): Position[] | null {
-  // Extra nodes for this query: start, dest, zone offset seeds
+  for (let i = 0; i < pts.length - 1; i++) {
+    const from = pts[i]
+    const to = pts[i + 1]
+
+    const fromReason = pointFailureReason(from)
+    const toReason = pointFailureReason(to)
+
+    if (fromReason || toReason) {
+      errors.push({ from, to, reason: fromReason || toReason || 'endpoint_outside_water' })
+      continue
+    }
+
+    if (distanceKm(from, to) > MAX_EDGE_KM) {
+      errors.push({ from, to, reason: 'segment_too_long' })
+      continue
+    }
+
+    const segmentReason = segmentFailureReason(from, to)
+    if (segmentReason) {
+      errors.push({ from, to, reason: segmentReason })
+      continue
+    }
+
+    const clearsZones = i === 0 && startInsideZones.length > 0
+      ? segmentEscapesStartingZones(from, to, zones, startInsideZones)
+      : segmentClearsZones(from, to, zones)
+
+    if (!clearsZones) {
+      errors.push({ from, to, reason: 'segment_crosses_restricted_zone' })
+    }
+  }
+
+  return errors
+}
+
+function dijkstra(
+  start: Position,
+  dest: Position,
+  zones: Zone[],
+  startInsideZones: string[]
+): Position[] | null {
   const extra: GraphNode[] = [
     start,
     dest,
     ...zones.flatMap(zoneOffsetSeeds).filter(p => isPointLegal(p, zones)),
   ]
 
-  const baseLen  = BASE_NODES.length
-  const startIdx = baseLen          // index of start in combined array
-  const destIdx  = baseLen + 1      // index of dest in combined array
-  const total    = baseLen + extra.length
+  const baseLen = BASE_NODES.length
+  const startIdx = baseLen
+  const destIdx = baseLen + 1
+  const total = baseLen + extra.length
 
-  const dist    = new Float64Array(total).fill(Infinity)
-  const prev    = new Int32Array(total).fill(-1)
+  const dist = new Float64Array(total).fill(Infinity)
+  const prev = new Int32Array(total).fill(-1)
   const visited = new Uint8Array(total)
+
   dist[startIdx] = 0
 
   function nodePos(i: number): Position {
@@ -135,126 +237,192 @@ function dijkstra(start: Position, dest: Position, zones: Zone[]): Position[] | 
   }
 
   for (let iter = 0; iter < total; iter++) {
-    // Pick cheapest unvisited
-    let u = -1, best = Infinity
-    for (let i = 0; i < total; i++) {
-      if (!visited[i] && dist[i] < best) { best = dist[i]; u = i }
-    }
-    if (u < 0 || u === destIdx) break
-    visited[u] = 1
-    const uPos = nodePos(u)
+    let u = -1
+    let best = Infinity
 
-    // Edges from the pre-built base graph (base-to-base)
-    if (u < baseLen) {
-      for (const e of BASE_EDGES[u]) {
-        if (visited[e.to]) continue
-        const vPos = nodePos(e.to)
-        // Re-check against runtime zones (base edges were built zone-free)
-        if (!segmentClearsZones(uPos, vPos, zones)) continue
-        const nd = dist[u] + e.km
-        if (nd < dist[e.to]) { dist[e.to] = nd; prev[e.to] = u }
+    for (let i = 0; i < total; i++) {
+      if (!visited[i] && dist[i] < best) {
+        best = dist[i]
+        u = i
       }
     }
 
-    // Edges from/to extra nodes — check against all neighbours
-    const uIsExtra = u >= baseLen
+    if (u < 0 || u === destIdx) break
+
+    visited[u] = 1
+    const uPos = nodePos(u)
+
+    if (u < baseLen) {
+      for (const e of BASE_EDGES[u]) {
+        if (visited[e.to]) continue
+
+        const vPos = nodePos(e.to)
+        if (!segmentClearsZones(uPos, vPos, zones)) continue
+
+        const nd = dist[u] + e.km
+
+        if (nd < dist[e.to]) {
+          dist[e.to] = nd
+          prev[e.to] = u
+        }
+      }
+    }
+
     for (let v = 0; v < total; v++) {
       if (v === u || visited[v]) continue
-      // Skip base-to-base (handled above)
       if (u < baseLen && v < baseLen) continue
+
       const vPos = nodePos(v)
       const km = distanceKm(uPos, vPos)
+
       if (km > MAX_EDGE_KM) continue
-      if (!isSegmentLegal(uPos, vPos, zones)) continue
+
+      const isFirstEdge = u === startIdx
+
+      if (!isSegmentLegalForQuery(uPos, vPos, zones, startInsideZones, isFirstEdge)) {
+        continue
+      }
+
       const nd = dist[u] + km
-      if (nd < dist[v]) { dist[v] = nd; prev[v] = u }
+
+      if (nd < dist[v]) {
+        dist[v] = nd
+        prev[v] = u
+      }
     }
   }
 
   if (!Number.isFinite(dist[destIdx])) return null
 
   const path: Position[] = []
+
   for (let at = destIdx; at !== -1; at = prev[at]) {
     path.unshift(nodePos(at))
     if (at === startIdx) break
   }
-  return path.length >= 2 ? simplifyPath(path, zones) : null
+
+  return path.length >= 2 ? path : null
 }
 
-// ─── segment legality ─────────────────────────────────────────────────────────
-
-/** Full check: water + zone avoidance. Used at query time. */
 function isSegmentLegal(from: Position, to: Position, zones: Zone[]): boolean {
-  if (!isLegalWaterPoint(from) || !isLegalWaterPoint(to)) return false
-  if (distanceKm(from, to) > MAX_EDGE_KM) return false
-  if (!segmentClearsZones(from, to, zones)) return false
-  return segmentInWater(from, to)
+  return isSegmentLegalForQuery(from, to, zones, [], false)
 }
 
-/** Water-only check (no zone check). Used at graph build time. */
+function isSegmentLegalForQuery(
+  from: Position,
+  to: Position,
+  zones: Zone[],
+  startInsideZones: string[],
+  isFirstEdge: boolean
+): boolean {
+  if (!isLegalWaterPoint(from) || !isLegalWaterPoint(to)) return false
+  if (distanceKm(from, to) > MAX_EDGE_KM) return false
+
+  const clearsZones = isFirstEdge && startInsideZones.length > 0
+    ? segmentEscapesStartingZones(from, to, zones, startInsideZones)
+    : segmentClearsZones(from, to, zones)
+
+  return clearsZones && segmentInWaterAndCorridor(from, to)
+}
+
 function isSegmentLegalNoZones(from: Position, to: Position): boolean {
-  if (!isLegalWaterPoint(from) || !isLegalWaterPoint(to)) return false
-  if (distanceKm(from, to) > MAX_EDGE_KM) return false
-  return segmentInWater(from, to)
+  return isLegalWaterPoint(from) &&
+    isLegalWaterPoint(to) &&
+    distanceKm(from, to) <= MAX_EDGE_KM &&
+    segmentInWaterAndCorridor(from, to)
 }
 
-/** Sample segment points and verify each is inside navigableWater. */
-function segmentInWater(from: Position, to: Position): boolean {
+function segmentInWaterAndCorridor(from: Position, to: Position): boolean {
   const km = distanceKm(from, to)
-  const samples = Math.max(3, Math.ceil(km / SAMPLE_STEP_KM))
+  const samples = Math.max(4, Math.ceil(km / SAMPLE_STEP_KM))
+
   for (let i = 1; i <= samples; i++) {
     const t = i / samples
-    const p: Position = {
+
+    const point: Position = {
       lat: from.lat + (to.lat - from.lat) * t,
       lng: from.lng + (to.lng - from.lng) * t,
     }
-    if (!isLegalWaterPoint(p)) return false
+
+    if (!isLegalWaterPoint(point)) return false
+    if (isInStraitPrecisionBox(point) && !isNearSeaLane(point)) return false
   }
+
   return true
 }
 
-/** Check segment does not intersect or pass through any restricted zone. */
 function segmentClearsZones(from: Position, to: Position, zones: Zone[]): boolean {
   if (zones.length === 0) return true
-  const zCoords = zones.map(z => z.coordinates)
-  if (zones.some(z => routeIntersectsPolygon(from, to, z.coordinates))) return false
+
+  const zoneCoordinates = zones.map(z => z.coordinates)
+
+  if (zones.some(z => routeIntersectsPolygon(from, to, z.coordinates))) {
+    return false
+  }
+
   const km = distanceKm(from, to)
-  const samples = Math.max(2, Math.ceil(km / SAMPLE_STEP_KM))
+  const samples = Math.max(3, Math.ceil(km / SAMPLE_STEP_KM))
+
   for (let i = 1; i < samples; i++) {
     const t = i / samples
-    const p: Position = {
+
+    const point: Position = {
       lat: from.lat + (to.lat - from.lat) * t,
       lng: from.lng + (to.lng - from.lng) * t,
     }
-    if (isPointInAnyPolygon(p, zCoords)) return false
+
+    if (isPointInAnyPolygon(point, zoneCoordinates)) return false
   }
+
   return true
 }
 
-function isPointLegal(p: Position, zones: Zone[]): boolean {
-  return isLegalWaterPoint(p) && !zones.some(z => pointInPolygon(p, z.coordinates))
+function segmentEscapesStartingZones(
+  from: Position,
+  to: Position,
+  zones: Zone[],
+  startInsideZoneIds: string[]
+): boolean {
+  if (startInsideZoneIds.length === 0) {
+    return segmentClearsZones(from, to, zones)
+  }
+
+  const startingZones = new Set(startInsideZoneIds)
+  const otherZones = zones.filter(zone => !startingZones.has(zone.id))
+
+  if (!segmentClearsZones(from, to, otherZones)) return false
+
+  const km = distanceKm(from, to)
+  const samples = Math.max(6, Math.ceil(km / SAMPLE_STEP_KM))
+  let escaped = false
+
+  for (let i = 1; i <= samples; i++) {
+    const t = i / samples
+
+    const point: Position = {
+      lat: from.lat + (to.lat - from.lat) * t,
+      lng: from.lng + (to.lng - from.lng) * t,
+    }
+
+    const insideStartingZone = zones.some(zone =>
+      startingZones.has(zone.id) && pointInPolygon(point, zone.coordinates)
+    )
+
+    if (!insideStartingZone) escaped = true
+    if (escaped && insideStartingZone) return false
+  }
+
+  return escaped
 }
 
-// ─── path helpers ─────────────────────────────────────────────────────────────
-
-function simplifyPath(path: Position[], zones: Zone[]): Position[] {
-  if (path.length <= 2) return path
-  const result: Position[] = [path[0]]
-  let anchor = 0
-  while (anchor < path.length - 1) {
-    let next = path.length - 1
-    while (next > anchor + 1 && !isSegmentLegal(path[anchor], path[next], zones)) {
-      next--
-    }
-    result.push(path[next])
-    anchor = next
-  }
-  return result
+function isPointLegal(point: Position, zones: Zone[]): boolean {
+  return isLegalWaterPoint(point) && !zones.some(z => pointInPolygon(point, z.coordinates))
 }
 
 function pathKm(path: Position[]): number {
   return path.slice(0, -1).reduce(
-    (total, p, i) => total + haversineDistance(p.lat, p.lng, path[i + 1].lat, path[i + 1].lng),
+    (total, point, i) =>
+      total + haversineDistance(point.lat, point.lng, path[i + 1].lat, path[i + 1].lng),
     0
   )
 }
@@ -267,64 +435,46 @@ function routePoints(ship: Ship): Position[] {
   ]
 }
 
-// ─── graph construction ───────────────────────────────────────────────────────
-
 function buildBaseNodes(): GraphNode[] {
   const bounds = polygonBounds(navigableWater)
   const grid: GraphNode[] = []
 
   for (let lat = bounds.south; lat <= bounds.north; lat += GRID_STEP_DEGREES) {
     for (let lng = bounds.west; lng <= bounds.east; lng += GRID_STEP_DEGREES) {
-      const p: Position = { lat: snap(lat), lng: snap(lng) }
-      if (isLegalWaterPoint(p)) grid.push(p)
+      const node: Position = { lat: snap(lat), lng: snap(lng) }
+
+      if (isLegalWaterPoint(node) && (!isInStraitPrecisionBox(node) || isNearSeaLane(node))) {
+        grid.push(node)
+      }
     }
   }
 
-  // Guaranteed-valid seeds for critical areas
   const seeds: Position[] = [
-    // Polygon vertices
     ...navigableWater.map(([lat, lng]) => ({ lat, lng })),
-    // All ports
-    ...Object.values(ports).map(p => ({ lat: p.lat, lng: p.lng })),
-    // Strait of Hormuz threading waypoints
-    { lat: 26.45, lng: 55.60 }, { lat: 26.40, lng: 55.70 },
-    { lat: 26.35, lng: 55.80 }, { lat: 26.30, lng: 55.90 },
-    { lat: 26.25, lng: 56.00 }, { lat: 26.20, lng: 56.10 },
-    { lat: 26.15, lng: 56.15 }, { lat: 26.10, lng: 56.20 },
-    { lat: 26.05, lng: 56.30 }, { lat: 26.00, lng: 56.40 },
-    { lat: 26.00, lng: 56.50 }, { lat: 26.00, lng: 56.60 },
-    { lat: 25.90, lng: 56.70 }, { lat: 25.80, lng: 56.80 },
-    { lat: 25.70, lng: 56.90 }, { lat: 25.60, lng: 57.00 },
-    { lat: 25.50, lng: 57.10 }, { lat: 25.40, lng: 57.20 },
-    // Gulf interior relay
-    { lat: 26.50, lng: 51.00 }, { lat: 26.00, lng: 52.00 },
-    { lat: 25.50, lng: 52.50 }, { lat: 25.20, lng: 53.50 },
-    { lat: 25.30, lng: 54.50 }, { lat: 25.50, lng: 55.50 },
-    { lat: 26.00, lng: 55.00 }, { lat: 26.30, lng: 55.00 },
-    { lat: 26.50, lng: 55.70 }, { lat: 26.50, lng: 55.90 },
-    // Gulf of Oman
-    { lat: 25.00, lng: 57.50 }, { lat: 24.50, lng: 57.80 },
-    { lat: 24.00, lng: 58.20 }, { lat: 23.50, lng: 58.80 },
-    { lat: 23.00, lng: 59.20 }, { lat: 22.50, lng: 59.60 },
+    ...Object.values(ports).map(port => ({ lat: port.lat, lng: port.lng })),
+    ...SEA_LANE_POINTS,
+    ...interpolateSeaLaneSeeds(SEA_LANE_POINTS),
   ]
 
-  // Merge, filter to water, deduplicate
-  const allSeeds = seeds.filter(p => isLegalWaterPoint(p))
-  return dedupeNodes([...grid, ...allSeeds])
+  return dedupeNodes([...grid, ...seeds.filter(isLegalWaterPoint)])
 }
 
 function buildBaseEdges(nodes: GraphNode[]): Edge[][] {
-  const n   = nodes.length
-  const adj: Edge[][] = Array.from({ length: n }, () => [])
+  const adj: Edge[][] = Array.from({ length: nodes.length }, () => [])
 
-  for (let i = 0; i < n; i++) {
-    // Collect candidates within MAX_EDGE_KM
+  for (let i = 0; i < nodes.length; i++) {
     const candidates: Array<{ j: number; km: number }> = []
-    for (let j = 0; j < n; j++) {
+
+    for (let j = 0; j < nodes.length; j++) {
       if (j === i) continue
+
       const km = distanceKm(nodes[i], nodes[j])
-      if (km <= MAX_EDGE_KM) candidates.push({ j, km })
+
+      if (km <= MAX_EDGE_KM) {
+        candidates.push({ j, km })
+      }
     }
+
     candidates.sort((a, b) => a.km - b.km)
 
     for (const { j, km } of candidates.slice(0, NEIGHBOR_COUNT)) {
@@ -337,52 +487,132 @@ function buildBaseEdges(nodes: GraphNode[]): Edge[][] {
   return adj
 }
 
-// ─── zone detour offsets ──────────────────────────────────────────────────────
-
 function zoneOffsetSeeds(zone: Zone): Position[] {
-  const b = polygonBounds(zone.coordinates)
-  const m = ZONE_MARGIN_DEG
-  const cx = (b.north + b.south) / 2
-  const cy = (b.west  + b.east)  / 2
+  const bounds = polygonBounds(zone.coordinates)
+  const margin = ZONE_MARGIN_DEG
+
+  const centerLat = (bounds.north + bounds.south) / 2
+  const centerLng = (bounds.west + bounds.east) / 2
+
   return [
-    { lat: b.north + m, lng: cy },
-    { lat: b.south - m, lng: cy },
-    { lat: cx,          lng: b.west - m },
-    { lat: cx,          lng: b.east + m },
-    { lat: b.north + m, lng: b.west - m },
-    { lat: b.north + m, lng: b.east + m },
-    { lat: b.south - m, lng: b.west - m },
-    { lat: b.south - m, lng: b.east + m },
-  ].map(p => ({ lat: snap(p.lat), lng: snap(p.lng) }))
+    { lat: bounds.north + margin, lng: centerLng },
+    { lat: bounds.south - margin, lng: centerLng },
+    { lat: centerLat, lng: bounds.west - margin },
+    { lat: centerLat, lng: bounds.east + margin },
+    { lat: bounds.north + margin, lng: bounds.west - margin },
+    { lat: bounds.north + margin, lng: bounds.east + margin },
+    { lat: bounds.south - margin, lng: bounds.west - margin },
+    { lat: bounds.south - margin, lng: bounds.east + margin },
+  ].map(point => ({
+    lat: snap(point.lat),
+    lng: snap(point.lng),
+  }))
 }
 
-// ─── utilities ────────────────────────────────────────────────────────────────
+function isLegalWaterPoint(point: Position): boolean {
+  return isInsideNavigableWater(point) &&
+    !STATIC_LAND_EXCLUSIONS.some(poly => pointInPolygon(point, poly))
+}
 
-function snapToNearestWaterNode(p: Position): Position | null {
+function pointFailureReason(point: Position): string | null {
+  if (!isInsideNavigableWater(point)) return 'endpoint_outside_water'
+  if (STATIC_LAND_EXCLUSIONS.some(poly => pointInPolygon(point, poly))) return 'endpoint_inside_land_mask'
+  return null
+}
+
+function segmentFailureReason(from: Position, to: Position): string | null {
+  const km = distanceKm(from, to)
+  const samples = Math.max(4, Math.ceil(km / SAMPLE_STEP_KM))
+
+  for (let i = 1; i <= samples; i++) {
+    const t = i / samples
+    const point: Position = {
+      lat: from.lat + (to.lat - from.lat) * t,
+      lng: from.lng + (to.lng - from.lng) * t,
+    }
+
+    if (!isInsideNavigableWater(point)) return 'segment_outside_water'
+    if (STATIC_LAND_EXCLUSIONS.some(poly => pointInPolygon(point, poly))) return 'segment_crosses_land_mask'
+    if (isInStraitPrecisionBox(point) && !isNearSeaLane(point)) return 'segment_crosses_land_mask'
+  }
+
+  return null
+}
+
+function isInStraitPrecisionBox(point: Position): boolean {
+  return point.lat >= 24.45 &&
+    point.lat <= 26.85 &&
+    point.lng >= 54.55 &&
+    point.lng <= 57.45
+}
+
+function isNearSeaLane(point: Position): boolean {
+  return SEA_LANE_POINTS.some(lane => distanceKm(point, lane) <= STRAIT_CORRIDOR_RADIUS_KM)
+}
+
+function interpolateSeaLaneSeeds(points: Position[]): Position[] {
+  const out: Position[] = []
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i]
+    const b = points[i + 1]
+
+    const km = distanceKm(a, b)
+    const pieces = Math.max(1, Math.ceil(km / 10))
+
+    for (let step = 1; step < pieces; step++) {
+      const t = step / pieces
+
+      out.push({
+        lat: snap(a.lat + (b.lat - a.lat) * t),
+        lng: snap(a.lng + (b.lng - a.lng) * t),
+      })
+    }
+  }
+
+  return out
+}
+
+function snapToNearestWaterNode(point: Position): Position | null {
   let best: GraphNode | null = null
   let bestKm = Infinity
-  for (const node of BASE_NODES) {
-    const km = distanceKm(p, node)
-    if (km < bestKm) { bestKm = km; best = node }
-  }
-  return best
-}
 
-function isLegalWaterPoint(p: Position): boolean {
-  return isInsideNavigableWater(p) &&
-    !STATIC_LAND_EXCLUSIONS.some(poly => pointInPolygon(p, poly))
+  for (const node of BASE_NODES) {
+    const km = distanceKm(point, node)
+
+    if (km < bestKm) {
+      bestKm = km
+      best = node
+    }
+  }
+
+  return best
 }
 
 function dedupeNodes(nodes: GraphNode[]): GraphNode[] {
   const seen = new Set<string>()
   const out: GraphNode[] = []
-  for (const n of nodes) {
-    const key = `${snap(n.lat)},${snap(n.lng)}`
-    if (!seen.has(key)) { seen.add(key); out.push({ lat: snap(n.lat), lng: snap(n.lng) }) }
+
+  for (const node of nodes) {
+    const key = `${snap(node.lat)},${snap(node.lng)}`
+
+    if (!seen.has(key)) {
+      seen.add(key)
+
+      out.push({
+        lat: snap(node.lat),
+        lng: snap(node.lng),
+      })
+    }
   }
+
   return out
 }
 
-function snap(v: number): number {
-  return Math.round(v * 10000) / 10000
+function p(lat: number, lng: number): Position {
+  return { lat, lng }
+}
+
+function snap(value: number): number {
+  return Math.round(value * 10000) / 10000
 }

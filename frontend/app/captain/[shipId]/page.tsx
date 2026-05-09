@@ -3,10 +3,12 @@
 import dynamic from 'next/dynamic'
 import { useMemo } from 'react'
 import { useParams } from 'next/navigation'
+import { EmergencyAudioControls } from '@/components/alerts/EmergencyAudioControls'
 import { DirectiveReceiver } from '@/components/directives/DirectiveReceiver'
 import { DistressInput } from '@/components/directives/DistressInput'
 import { TopBar } from '@/components/layout/TopBar'
 import { ShipDetailCard } from '@/components/ships/ShipDetailCard'
+import { useAlerts } from '@/lib/socket/useAlerts'
 import { useDirectives } from '@/lib/socket/useDirectives'
 import { useFleetState } from '@/lib/socket/useFleetState'
 import { useZones } from '@/lib/socket/useZones'
@@ -21,8 +23,10 @@ export default function CaptainPage() {
   const shipId = params.shipId
   const { ships, connected, lastTimestamp } = useFleetState()
   const { zones } = useZones()
+  const { alerts } = useAlerts()
   const { directives, respondToDirective, escalateDistress } = useDirectives(shipId)
   const ownShip = useMemo(() => ships.find((ship) => ship.id === shipId), [ships, shipId])
+  const relevantAlerts = alerts.filter((alert) => alert.shipId === shipId || alert.relatedShipId === shipId)
 
   return (
     <main className="opsShell captainShell">
@@ -36,6 +40,7 @@ export default function CaptainPage() {
         <FleetMap ships={ships} zones={zones} selectedShipId={shipId} captainShipId={shipId} />
       </section>
       <aside className="rightRail captainRail">
+        <EmergencyAudioControls alerts={relevantAlerts} />
         <ShipDetailCard ship={ownShip} title="Assigned Vessel" />
         <DirectiveReceiver
           directives={directives.filter((directive) => directive.shipId === shipId)}
